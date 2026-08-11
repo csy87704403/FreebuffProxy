@@ -10,6 +10,8 @@ FreebuffProxy is an OpenAI-compatible proxy server for [Freebuff](https://freebu
 - **Stealth Request Handling** — Dynamic, randomized client fingerprints that mimic official Freebuff SDK behavior.
 - **Multi-Token Rotation** — Cycle through multiple auth tokens with automatic periodic rotation.
 - **HTTP Proxy Support** — Route all outbound traffic through a configurable upstream proxy.
+- **Built-in Web UI** — Model pull / latency probe / token status / usage stats / request logs, embedded in a single binary.
+- **GHCR Docker Image** — Public image, one-command deployment on any machine.
 
 ## Getting Auth Tokens
 
@@ -86,15 +88,56 @@ Environment variables override JSON values when both are set.
 
 ## Deployment
 
-### Docker
+### Docker (GHCR 镜像，推荐)
 
-Pre-built multi-arch images are available on GHCR:
+Pre-built images are available on GHCR (public, no login needed):
 
 ```bash
-docker run -d --name FreebuffProxy \
+# 1. Pull the image
+docker pull ghcr.io/csy87704403/freebuff-proxy:latest
+
+# 2. Create config.json
+mkdir -p /opt/freebuff-proxy
+cat > /opt/freebuff-proxy/config.json << 'EOF'
+{
+  "LISTEN_ADDR": ":16880",
+  "UPSTREAM_BASE_URL": "https://www.codebuff.com",
+  "AUTH_TOKENS": ["put-your-freebuff-token-here"],
+  "ROTATION_INTERVAL": "6h",
+  "REQUEST_TIMEOUT": "120s",
+  "API_KEYS": [],
+  "HTTP_PROXY": ""
+}
+EOF
+
+# 3. Run
+docker run -d \
+  --name freebuff-proxy \
+  --restart unless-stopped \
+  -p 16880:16880 \
+  -v /opt/freebuff-proxy/config.json:/app/config.json \
+  ghcr.io/csy87704403/freebuff-proxy:latest
+
+# 4. Verify
+curl http://127.0.0.1:16880/healthz
+curl http://127.0.0.1:16880/v1/models
+```
+
+**Available tags:**
+- `latest` — 最新稳定版
+- `v1.0.0` — 首个发布版本
+
+> 💡 **Web UI**: 部署后访问 `http://<你的IP>:16880/` 即可打开管理面板（拉起模型 / 探测延迟 / 账号状态 / 用量统计 / 调用日志）。
+
+### 通过环境变量运行（不用 config.json）
+
+```bash
+docker run -d --name freebuff-proxy \
   -p 16880:16880 \
   -e AUTH_TOKENS="token1,token2" \
-  ghcr.io/quorinex/freebuff2api:latest
+  -e UPSTREAM_BASE_URL="https://www.codebuff.com" \
+  -e HTTP_PROXY="http://x.x.x.x:8078" \
+  ghcr.io/csy87704403/freebuff-proxy:latest
 ```
 
 Build from source:

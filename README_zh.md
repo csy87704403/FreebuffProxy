@@ -10,6 +10,8 @@ FreebuffProxy 是 [Freebuff](https://freebuff.com) 的 OpenAI 兼容代理服务
 - **高隐匿性请求处理** — 动态随机客户端特征标识，模拟官方 Freebuff SDK 行为模式。
 - **多 Token 轮换** — 支持多个认证 Token，内置定期自动轮换机制。
 - **HTTP 代理支持** — 可为所有外部请求配置上游 HTTP 代理。
+- **内置 Web 管理面板** — 拉起模型 / 探测延迟 / 账号状态 / 用量统计 / 调用日志，单二进制内嵌。
+- **GHCR Docker 镜像** — 公开镜像，任意机器一条命令部署。
 
 ## 获取 Auth Token
 
@@ -86,15 +88,56 @@ npm i -g freebuff
 
 ## 部署运行
 
-### Docker 部署
+### Docker 部署（GHCR 镜像，推荐）
 
-预构建多架构镜像已发布至 GHCR：
+镜像已发布至 GHCR（公开，无需登录即可拉取）：
 
 ```bash
-docker run -d --name FreebuffProxy \
+# 1. 拉取镜像
+docker pull ghcr.io/csy87704403/freebuff-proxy:latest
+
+# 2. 创建配置文件
+mkdir -p /opt/freebuff-proxy
+cat > /opt/freebuff-proxy/config.json << 'EOF'
+{
+  "LISTEN_ADDR": ":16880",
+  "UPSTREAM_BASE_URL": "https://www.codebuff.com",
+  "AUTH_TOKENS": ["填入你的freebuff_token"],
+  "ROTATION_INTERVAL": "6h",
+  "REQUEST_TIMEOUT": "120s",
+  "API_KEYS": [],
+  "HTTP_PROXY": ""
+}
+EOF
+
+# 3. 运行容器
+docker run -d \
+  --name freebuff-proxy \
+  --restart unless-stopped \
+  -p 16880:16880 \
+  -v /opt/freebuff-proxy/config.json:/app/config.json \
+  ghcr.io/csy87704403/freebuff-proxy:latest
+
+# 4. 验证
+curl http://127.0.0.1:16880/healthz
+curl http://127.0.0.1:16880/v1/models
+```
+
+**可用标签：**
+- `latest` — 最新稳定版
+- `v1.0.0` — 首个发布版本
+
+> 💡 **Web 管理面板**：部署后访问 `http://<你的IP>:16880/` 即可打开（拉起模型 / 探测延迟 / 账号状态 / 用量统计 / 调用日志）。
+
+### 通过环境变量运行（不用 config.json）
+
+```bash
+docker run -d --name freebuff-proxy \
   -p 16880:16880 \
   -e AUTH_TOKENS="token1,token2" \
-  ghcr.io/quorinex/freebuff2api:latest
+  -e UPSTREAM_BASE_URL="https://www.codebuff.com" \
+  -e HTTP_PROXY="http://x.x.x.x:8078" \
+  ghcr.io/csy87704403/freebuff-proxy:latest
 ```
 
 手动构建：
