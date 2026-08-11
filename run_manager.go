@@ -157,15 +157,55 @@ func (m *RunManager) prewarm(agentIDs []string) {
 	defer cancel()
 
 	for _, pool := range m.pools {
-		if _, err := pool.ensureSession(ctx); err != nil {
-			m.logger.Printf("%s: free session prewarm failed: %v", pool.name, err)
+		pool.prewarm(ctx, agentIDs, m.logger)
+	}
+}
+
+// AddToken 运行时添加新 token 到池中，热重载无需重启
+func (m *RunManager) AddToken(token string, agentIDs []string) (bool, error) {
+	// 去重
+	for _, pool := range m.pools {
+		if pool.token == token {
+			return false, nil
 		}
-		for _, agentID := range agentIDs {
-			if err := pool.rotateAgent(ctx, agentID); err != nil {
-				m.logger.Printf("%s: prewarm %s failed: %v", pool.name, agentID, err)
-			} else {
-				m.logger.Printf("%s: prewarmed %s", pool.name, agentID)
-			}
+	}
+
+	nextIndex := len(m.pools) + 1
+	pool := &tokenPool{
+		name:   fmt.Sprintf("token-%d", nextIndex),
+		token:  token,
+		cfg:    m.cfg,
+		client: nil,
+		runs:   make(map[string]*managedRun),
+		logger: m.logger,
+	}
+	// 复用已有池的 UpstreamClient
+	for _, p := range m.pools {
+		pool.client = p.client
+		break
+	}
+	if pool.client == nil {
+		pool.client = NewUpstreamClient(m.cfg)
+	}
+
+	m.pools = append(m.pools, pool)
+
+	// 后台预热
+	go pool.prewarm(context.Background(), agentIDs, m.logger)
+
+	m.logger.Printf("Added token %s (total: %d)", pool.name, len(m.pools))
+	return true, nil
+}
+
+func (p *tokenPool) prewarm(ctx context.Context, agentIDs []string, logger *log.Logger) {
+	if _, err := p.ensureSession(ctx); err != nil {
+		logger.Printf("%s: free session prewarm failed: %v", p.name, err)
+	}
+	for _, agentID := range agentIDs {
+		if err := p.rotateAgent(ctx, agentID); err != nil {
+			logger.Printf("%s: prewarm %s failed: %v", p.name, agentID, err)
+		} else {
+			logger.Printf("%s: prewarmed %s", p.name, agentID)
 		}
 	}
 }

@@ -176,6 +176,13 @@ func (s *Server) handleAuthImport(w http.ResponseWriter, r *http.Request) {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "write config: " + err.Error()})
 			return
 		}
+		// 热重载：加入 token 池
+		agentIDs := s.registry.AgentIDs()
+		if added, err := s.runs.AddToken(payload.AuthToken, agentIDs); err != nil {
+			s.webui.Log("error", "auth", "hot reload token failed: "+err.Error())
+		} else if added {
+			s.webui.Log("info", "auth", "added token via OAuth: "+payload.Email)
+		}
 	}
 
 	writeJSON(w, http.StatusOK, map[string]any{
