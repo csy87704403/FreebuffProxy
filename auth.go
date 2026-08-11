@@ -1,0 +1,194 @@
+package main
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+)
+
+// FreebuffAuthAPI 指回 freebuff.llm.pm 的认证后端
+const authBackendBase = "https://freebuff.llm.pm"
+
+// session 生成请求的响应
+type authCodeResponse struct {
+	FingerprintID   string `json:"fingerprintId"`
+	FingerprintHash string `json:"fingerprintHash"`
+	LoginURL        string `json:"loginUrl"`
+	ExpiresAt       int64  `json:"expiresAt"`
+	ExpiresInMs     int64  `json:"expiresInMs"`
+}
+
+// 轮询状态响应
+type authStatusResponse struct {
+	Pending bool `json:"pending"`
+	User    *struct {
+		ID             string `json:"id"`
+		Name           string `json:"name"`
+		Email          string `json:"email"`
+		AuthToken      string `json:"authToken"`
+		FingerprintID  string `json:"fingerprintId"`
+		FingerprintHash string `json:"fingerprintHash"`
+	} `json:"user"`
+	Error string `json:"error"`
+}
+// ============ HTTP Handlers ============
+
+// handleAuthCode 代理 POST /api/code 到 freebuff.llm.pm
+func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	resp, err := http.Post(authBackendBase+"/api/code", "application/json", nil)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream call failed: " + err.Error()})
+		return
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "read upstream response: " + err.Error()})
+		return
+	}
+
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream status " + fmt.Sprint(resp.StatusCode) + ": " + string(body)})
+		return
+	}
+
+	var parsed authCodeResponse
+	if err := json.Unmarshal(body, &parsed); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "parse upstream response: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, parsed)
+}
+
+// handleAuthStatus 代理 POST /api/status 到 freebuff.llm.pm（轮询拿 token）
+func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "read body: " + err.Error()})
+		return
+	}
+
+	// 代理到 upstream
+	upstreamResp, err := http.Post(authBackendBase+"/api/status", "application/json", bytes.NewReader(bodyBytes))
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream call failed: " + err.Error()})
+		return
+	}
+	defer upstreamResp.Body.Close()
+
+	upstreamBody, err := io.ReadAll(upstreamResp.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "read upstream response: " + err.Error()})
+		return
+	}
+
+	if upstreamResp.StatusCode < 200 || upstreamResp.StatusCode >= 300 {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream status " + fmt.Sprint(upstreamResp.StatusCode) + ": " + string(upstreamBody)})
+		return
+	}
+
+	var parsed authStatusResponse
+	if err := json.Unmarshal(upstreamBody, &parsed); err != nil {
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "parse upstream response: " + err.Error()})
+		return
+	}
+
+	writeJSON(w, http.StatusOK, parsed)
+}
+
+// handleAuthImport 把拿到的 token 写进 config.json 并热重载
+func (s *Server) handleAuthImport(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+		return
+	}
+
+	bodyBytes, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "read body: " + err.Error()})
+		return
+	}
+
+	var payload struct {
+		AuthToken   string `json:"authToken"`
+		Email       string `json:"email"`
+		Name        string `json:"name"`
+		FingerprintID string `json:"fingerprintId"`
+	}
+	if err := json.Unmarshal(bodyBytes, &payload); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+		return
+	}
+
+	if payload.AuthToken == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "authToken is required"})
+		return
+	}
+
+	// 写进 config.json
+	configPath := s.cfg.ConfigPath
+	if configPath == "" {
+		configPath = "config.json"
+	}
+
+	raw, err := os.ReadFile(configPath)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "read config: " + err.Error()})
+		return
+	}
+
+	var cfg map[string]any
+	if err := json.Unmarshal(raw, &cfg); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "parse config: " + err.Error()})
+		return
+	}
+
+	// 追加 token
+	tokens, _ := cfg["AUTH_TOKENS"].([]any)
+	// 去重
+	already := false
+	for _, t := range tokens {
+		if tStr, ok := t.(string); ok && tStr == payload.AuthToken {
+			already = true
+			break
+		}
+	}
+	if !already {
+		tokens = append(tokens, payload.AuthToken)
+		cfg["AUTH_TOKENS"] = tokens
+		updated, _ := json.MarshalIndent(cfg, "", "  ")
+		if err := os.WriteFile(configPath, updated, 0644); err != nil {
+			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "write config: " + err.Error()})
+			return
+		}
+	}
+
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok":      true,
+		"added":   !already,
+		"total":   len(tokens),
+		"token":   truncateToken(payload.AuthToken),
+	})
+}
+
+func truncateToken(t string) string {
+	if len(t) > 8 {
+		return t[:8] + "***"
+	}
+	return t + "***"
+}

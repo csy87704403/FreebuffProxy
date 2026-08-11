@@ -68,6 +68,40 @@ table.probe td:first-child{font-family:ui-monospace,monospace;font-size:12px}
 </div>
 
 <div class="card">
+  <h2>Freebuff 账号登录</h2>
+  <div class="row">
+    <button class="btn btn-primary" onclick="startAuth()">生成登录链接</button>
+    <span id="auth-status" style="font-size:13px;color:#8b949e"></span>
+  </div>
+  <div id="auth-step2" class="hidden">
+    <p style="font-size:13px;color:#8b949e;margin-bottom:8px">
+      1. 点击下方链接用 GitHub/Google 登录<br>
+      2. 登录后浏览器地址栏会跳转到一个以 <code>auth_code=</code> 结尾的 URL<br>
+      3. 把完整的 URL 粘贴到下方输入框
+    </p>
+    <div class="row">
+      <a id="auth-login-url" href="#" target="_blank" style="flex:1;font-size:13px;color:#58a6ff;word-break:break-all"></a>
+      <button class="btn" onclick="copyUrl()">复制链接</button>
+    </div>
+    <textarea id="auth-callback-input" placeholder="粘贴完整的回调 URL（包含 auth_code=...）" style="min-height:50px;margin-top:8px"></textarea>
+    <div class="row" style="margin-top:8px">
+      <button class="btn btn-primary" onclick="verifyAuth()">验证并获取 Token</button>
+      <button class="btn" onclick="cancelAuth()">取消</button>
+    </div>
+    <div id="auth-progress" style="display:none;margin-top:8px">
+      <div style="height:3px;background:#30363d;border-radius:3px;overflow:hidden">
+        <div id="auth-progress-bar" style="height:100%;width:0%;background:#58a6ff;transition:width .4s linear"></div>
+      </div>
+      <span id="auth-progress-text" style="font-size:12px;color:#8b949e;margin-top:4px">等待登录中...</span>
+    </div>
+  </div>
+  <div id="auth-result" class="hidden" style="margin-top:8px;padding:10px;background:#0d1117;border:1px solid #30363d;border-radius:6px">
+    <p style="color:#3fb950;font-weight:500">✅ Token 已添加！</p>
+    <p id="auth-result-detail" style="font-size:13px;color:#8b949e"></p>
+  </div>
+</div>
+
+<div class="card">
   <h2>聊天测试</h2>
   <div class="row">
     <select id="chat-model" style="flex:1;min-width:200px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px"></select>

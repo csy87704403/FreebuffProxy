@@ -291,3 +291,141 @@ setInterval(() => { loadTokens(); }, 15000);
   loadUsage();
   loadLogs();
 })();
+
+// ============ Freebuff OAuth 登录 ============
+let authSession = null;
+let authPollAbort = null;
+
+async function startAuth() {
+  const btn = document.querySelector('#auth-step2 ~ .card .btn-primary');
+  const status = $('#auth-status');
+  status.textContent = '生成中...';
+  try {
+    const s = await api('/api/webui/auth/code', { method: 'POST' });
+    authSession = s;
+    $('#auth-login-url').textContent = s.loginUrl;
+    $('#auth-login-url').href = s.loginUrl;
+    $('#auth-step2').classList.remove('hidden');
+    $('#auth-result').classList.add('hidden');
+    status.textContent = '已生成登录链接，请登录后粘贴回调 URL';
+    // 自动复制到剪贴板
+    navigator.clipboard.writeText(s.loginUrl).catch(() => {});
+  } catch (e) {
+    status.textContent = '生成失败: ' + e.message;
+  }
+}
+
+function copyUrl() {
+  const url = $('#auth-login-url').textContent;
+  navigator.clipboard.writeText(url).catch(() => {});
+  flash('登录链接已复制');
+}
+
+function cancelAuth() {
+  if (authPollAbort) { authPollAbort.abort(); authPollAbort = null; }
+  authSession = null;
+  $('#auth-step2').classList.add('hidden');
+  $('#auth-progress').style.display = 'none';
+  $('#auth-result').classList.add('hidden');
+  $('#auth-status').textContent = '';
+}
+
+async function verifyAuth() {
+  const raw = $('#auth-callback-input').value.trim();
+  if (!raw) { flash('请粘贴回调 URL'); return; }
+
+  // 从 URL 提取 auth_code
+  let code = raw;
+  if (raw.includes('auth_code=')) {
+    try { const u = new URL(raw); code = u.searchParams.get('auth_code'); } catch(e) {}
+  }
+  // freebuff.llm.pm 的校验：auth_code 必须点分隔 ≥3 段
+  if (!code || code.split('.').length < 3) {
+    if (raw.includes('auth_code')) {
+      flash('URL 格式不对，请粘贴完整的回调 URL（包含 auth_code=...）');
+    } else {
+      flash('输入的 auth_code 无效，请粘贴完整的回调 URL');
+    }
+    return;
+  }
+
+  // fingerprint 前缀校验
+  if (authSession && authSession.fingerprintId) {
+    const prefix = code.split('.')[0];
+    if (prefix !== authSession.fingerprintId) {
+      flash('Fingerprint 不匹配！请重新生成登录链接再试');
+      return;
+    }
+  }
+
+  const btn = document.querySelector('#auth-step2 .btn-primary');
+  btn.disabled = true;
+  btn.textContent = '验证中...';
+  $('#auth-progress').style.display = 'block';
+  $('#auth-progress-bar').style.width = '0%';
+  $('#auth-progress-text').textContent = '等待登录完成...';
+
+  authPollAbort = new AbortController();
+  const max = 15;
+
+  try {
+    let user = null;
+    for (let i = 0; i < max; i++) {
+      if (authPollAbort.signal.aborted) throw new Error('已取消');
+      $('#auth-progress-bar').style.width = Math.min(((i + 1) / max) * 100, 100) + '%';
+
+      const r = await fetch('/api/webui/auth/status', {
+        method: 'POST',
+        signal: authPollAbort.signal,
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          fingerprintId: authSession.fingerprintId,
+          fingerprintHash: authSession.fingerprintHash,
+          expiresAt: authSession.expiresAt
+        })
+      });
+      if (!r.ok) throw new Error('状态检查失败 (' + r.status + ')');
+      const d = await r.json();
+      if (d.error) throw new Error(d.error);
+      if (!d.pending && d.user) { user = d.user; break; }
+      await new Promise(resolve => setTimeout(resolve, 2000));
+    }
+
+    if (!user) throw new Error('超时 — 30 秒内未完成登录');
+
+    // 拿到 token，写入 config
+    const importRes = await fetch('/api/webui/auth/import', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        authToken: user.authToken,
+        email: user.email,
+        name: user.name,
+        fingerprintId: user.fingerprintId
+      })
+    });
+    const importData = await importRes.json();
+    if (!importData.ok) throw new Error(importData.error || '导入失败');
+
+    // 显示结果
+    $('#auth-result').classList.remove('hidden');
+    $('#auth-result-detail').textContent = `账号: ${user.name} (${user.email}) | Token: ${user.authToken.slice(0, 8)}***`;
+    $('#auth-step2').classList.add('hidden');
+    $('#auth-progress').style.display = 'none';
+    $('#auth-status').textContent = '✅ 登录成功，Token 已添加';
+    flash('Token 已成功添加并持久化到 config.json！');
+
+    // 刷新账号状态
+    loadTokens();
+  } catch (e) {
+    if (e.message !== '已取消') {
+      $('#auth-status').textContent = '验证失败: ' + e.message;
+      flash('验证失败: ' + e.message);
+    }
+  } finally {
+    btn.disabled = false;
+    btn.textContent = '验证并获取 Token';
+    authPollAbort = null;
+    $('#auth-progress').style.display = 'none';
+  }
+}
