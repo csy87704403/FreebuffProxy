@@ -14,13 +14,14 @@ import (
 )
 
 type Server struct {
-	cfg      Config
-	logger   *log.Logger
-	client   *UpstreamClient
-	runs     *RunManager
-	registry *ModelRegistry
-	started  time.Time
-	webui    *WebUI
+	cfg        Config
+	logger     *log.Logger
+	client     *UpstreamClient
+	runs       *RunManager
+	registry   *ModelRegistry
+	started    time.Time
+	webui      *WebUI
+	proxyPool  *ProxyPool
 }
 
 func NewServer(cfg Config, logger *log.Logger, registry *ModelRegistry) *Server {
@@ -28,13 +29,14 @@ func NewServer(cfg Config, logger *log.Logger, registry *ModelRegistry) *Server 
 	runManager := NewRunManager(cfg, client, logger)
 
 	return &Server{
-		cfg:      cfg,
-		logger:   logger,
-		client:   client,
-		runs:     runManager,
-		registry: registry,
-		started:  time.Now(),
-		webui:    NewWebUI(),
+		cfg:       cfg,
+		logger:    logger,
+		client:    client,
+		runs:      runManager,
+		registry:  registry,
+		started:   time.Now(),
+		webui:     NewWebUI(),
+		proxyPool: NewProxyPool("proxy_pool.json"),
 	}
 }
 
@@ -54,6 +56,28 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/api/webui/usage", s.handleWebUIUsage)
 	mux.HandleFunc("/api/webui/logs", s.handleWebUILogs)
 	mux.HandleFunc("/api/webui/logs/clear", s.handleWebUILogsClear)
+	// OAuth 登录
+	mux.HandleFunc("/api/webui/auth/code", s.handleAuthCode)
+	mux.HandleFunc("/api/webui/auth/status", s.handleAuthStatus)
+	mux.HandleFunc("/api/webui/auth/import", s.handleAuthImport)
+	mux.HandleFunc("/api/webui/auth/account/delete", s.handleAuthAccountDelete)
+
+	// 模型管理
+	mux.HandleFunc("/api/webui/models", s.handleWebUIModels)
+	mux.HandleFunc("/api/webui/models/toggle", s.handleWebUIModelToggle)
+
+	// API Keys 管理
+	mux.HandleFunc("/api/webui/apis", s.handleWebUIApis)
+	mux.HandleFunc("/api/webui/apis/create", s.handleWebUIApiCreate)
+	mux.HandleFunc("/api/webui/apis/delete", s.handleWebUIApiDelete)
+
+	// 设置
+	mux.HandleFunc("/api/webui/settings/password", s.handleWebUISettingsPassword)
+
+	// Proxy pool management
+	mux.HandleFunc("/api/webui/proxy/pool", s.handleProxyPool)
+	mux.HandleFunc("/api/webui/proxy/refresh", s.handleProxyRefresh)
+	mux.HandleFunc("/api/webui/proxy/select", s.handleProxySelect)
 	return s.withMiddleware(mux)
 }
 
