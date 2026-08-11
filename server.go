@@ -91,6 +91,11 @@ func (s *Server) Shutdown(ctx context.Context) {
 
 func (s *Server) withMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Web UI 路径（页面 + 管理 API）不要求 API key
+		if isWebUIPath(r.URL.Path) {
+			next.ServeHTTP(w, r)
+			return
+		}
 		if len(s.cfg.APIKeys) > 0 && !s.authorized(r) {
 			if isClaudeRequestPath(r.URL.Path) {
 				writeClaudeError(w, http.StatusUnauthorized, "invalid proxy api key", "authentication_error")
@@ -101,6 +106,17 @@ func (s *Server) withMiddleware(next http.Handler) http.Handler {
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// isWebUIPath 判断是否为 Web UI 相关路径（页面 + 管理 API）
+func isWebUIPath(path string) bool {
+	if path == "/" || path == "/webui.js" {
+		return true
+	}
+	if strings.HasPrefix(path, "/api/webui/") || path == "/healthz" {
+		return true
+	}
+	return false
 }
 
 func (s *Server) authorized(r *http.Request) bool {
