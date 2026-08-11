@@ -1,5 +1,5 @@
 {
-  "LISTEN_ADDR": ":8080",
+  "LISTEN_ADDR": ":16880",
   "UPSTREAM_BASE_URL": "https://www.codebuff.com",
   "AUTH_TOKENS": [],
   "ROTATION_INTERVAL": "6h",

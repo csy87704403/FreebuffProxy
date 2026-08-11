@@ -14,9 +14,11 @@ import (
 )
 
 type UpstreamClient struct {
-	baseURL    string
-	httpClient *http.Client
-	userAgent  string
+	baseURL      string
+	httpClient   *http.Client
+	userAgent    string // chat/completions 用的 UA (Python UA_CHAT)
+	sessionUA    string // session/run 用的 UA (Python UA_SESSION)
+	actingUserID string // x-freebuff-acting-user-id 头 (Python 已验证)
 }
 
 func NewUpstreamClient(cfg Config) *UpstreamClient {
@@ -33,7 +35,9 @@ func NewUpstreamClient(cfg Config) *UpstreamClient {
 			Timeout:   cfg.RequestTimeout,
 			Transport: transport,
 		},
-		userAgent: cfg.UserAgent,
+		userAgent:    cfg.UserAgent,
+		sessionUA:    "Bun/1.3.14",
+		actingUserID: cfg.ActingUserID,
 	}
 }
 
@@ -47,7 +51,7 @@ func (c *UpstreamClient) StartRun(ctx context.Context, authToken, agentID string
 		return "", fmt.Errorf("marshal start run request: %w", err)
 	}
 
-	resp, err := c.doJSON(ctx, authToken, "/api/v1/agent-runs", body)
+	resp, err := c.doJSONWithUA(ctx, authToken, "/api/v1/agent-runs", body, c.sessionUA)
 	if err != nil {
 		return "", err
 	}
@@ -83,12 +87,27 @@ func (c *UpstreamClient) FinishRun(ctx context.Context, authToken, runID string,
 		"directCredits": 0,
 		"totalCredits":  0,
 	}
+	// Python 已验证协议: steps 数组 (含 stepNumber/status/completed)
+	steps := make([]map[string]any, 0, totalSteps)
+	for i := 1; i <= totalSteps; i++ {
+		steps = append(steps, map[string]any{
+			"id":          generateUUID(),
+			"stepNumber":  i,
+			"credits":     0,
+			"childRunIds": []any{},
+			"messageId":   nil,
+			"status":      "completed",
+			"startTime":   time.Now().UTC().Format("2006-01-02T15:04:05Z"),
+		})
+	}
+	payload["steps"] = steps
+
 	body, err := json.Marshal(payload)
 	if err != nil {
 		return fmt.Errorf("marshal finish run request: %w", err)
 	}
 
-	resp, err := c.doJSON(ctx, authToken, "/api/v1/agent-runs", body)
+	resp, err := c.doJSONWithUA(ctx, authToken, "/api/v1/agent-runs", body, c.sessionUA)
 	if err != nil {
 		return err
 	}
@@ -123,6 +142,10 @@ func (c *UpstreamClient) ChatCompletions(ctx context.Context, authToken string, 
 }
 
 func (c *UpstreamClient) doJSON(ctx context.Context, authToken, path string, body []byte) (*http.Response, error) {
+	return c.doJSONWithUA(ctx, authToken, path, body, c.userAgent)
+}
+
+func (c *UpstreamClient) doJSONWithUA(ctx context.Context, authToken, path string, body []byte, ua string) (*http.Response, error) {
 	requestURL, err := url.JoinPath(c.baseURL, path)
 	if err != nil {
 		return nil, fmt.Errorf("build upstream url: %w", err)
@@ -135,7 +158,10 @@ func (c *UpstreamClient) doJSON(ctx context.Context, authToken, path string, bod
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json, text/event-stream")
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", ua)
+	if c.actingUserID != "" {
+		req.Header.Set("x-freebuff-acting-user-id", c.actingUserID)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {

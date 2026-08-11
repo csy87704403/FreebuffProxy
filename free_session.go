@@ -306,7 +306,10 @@ func (c *UpstreamClient) EndSession(ctx context.Context, authToken string) error
 	}
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", c.sessionUA)
+	if c.actingUserID != "" {
+		req.Header.Set("x-freebuff-acting-user-id", c.actingUserID)
+	}
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
@@ -341,7 +344,10 @@ func (c *UpstreamClient) doSessionRequest(ctx context.Context, method, authToken
 	}
 	req.Header.Set("Authorization", "Bearer "+authToken)
 	req.Header.Set("Accept", "application/json")
-	req.Header.Set("User-Agent", c.userAgent)
+	req.Header.Set("User-Agent", c.sessionUA)
+	if c.actingUserID != "" {
+		req.Header.Set("x-freebuff-acting-user-id", c.actingUserID)
+	}
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
 	}

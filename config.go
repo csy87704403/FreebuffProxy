@@ -21,6 +21,7 @@ type Config struct {
 	UserAgent        string
 	APIKeys          []string
 	HTTPProxy        string
+	ActingUserID     string
 }
 
 type rawConfig struct {
@@ -31,6 +32,7 @@ type rawConfig struct {
 	RequestTimeout   string   `json:"REQUEST_TIMEOUT"`
 	APIKeys          []string `json:"API_KEYS"`
 	HTTPProxy        string   `json:"HTTP_PROXY"`
+	ActingUserID     string   `json:"ACTING_USER_ID"`
 }
 
 func loadConfig(configPath string) (Config, error) {
@@ -46,6 +48,7 @@ func loadConfig(configPath string) (Config, error) {
 	overrideCSV(&cfg.AuthTokens, "AUTH_TOKENS")
 	overrideCSV(&cfg.APIKeys, "API_KEYS")
 	overrideString(&cfg.HTTPProxy, "HTTP_PROXY")
+	overrideString(&cfg.ActingUserID, "ACTING_USER_ID")
 
 	rotationInterval, err := time.ParseDuration(strings.TrimSpace(cfg.RotationInterval))
 	if err != nil {
@@ -66,6 +69,7 @@ func loadConfig(configPath string) (Config, error) {
 		UserAgent:        generateUserAgent(),
 		APIKeys:          dedupeStrings(cfg.APIKeys),
 		HTTPProxy:        strings.TrimSpace(cfg.HTTPProxy),
+		ActingUserID:     strings.TrimSpace(cfg.ActingUserID),
 	}
 
 	switch {
@@ -104,7 +108,7 @@ func normalizeUpstreamBaseURL(raw string) string {
 
 func loadRawConfig(configPath string) (rawConfig, error) {
 	cfg := rawConfig{
-		ListenAddr:       ":8080",
+		ListenAddr:       ":16880",
 		UpstreamBaseURL:  "https://www.codebuff.com",
 		RotationInterval: "6h",
 		RequestTimeout:   "15m",
@@ -200,4 +204,15 @@ func generateClientSessionId() string {
 		out[i] = alphabet[buf[i%len(buf)]%36]
 	}
 	return string(out)
+}
+
+// generateUUID 生成 RFC4122 风格 UUID（对应 Python 的 str(uuid.uuid4())）
+func generateUUID() string {
+	buf := make([]byte, 16)
+	if _, err := rand.Read(buf); err != nil {
+		return fmt.Sprintf("%x-%x-%x-%x-%x", time.Now().UnixNano(), time.Now().UnixNano()>>16, 0, 0, 0)
+	}
+	buf[6] = (buf[6] & 0x0f) | 0x40 // version 4
+	buf[8] = (buf[8] & 0x3f) | 0x80 // variant 10
+	return fmt.Sprintf("%x-%x-%x-%x-%x", buf[0:4], buf[4:6], buf[6:8], buf[8:10], buf[10:16])
 }

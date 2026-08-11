@@ -1,8 +1,8 @@
-# Freebuff2API
+# FreebuffProxy
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Freebuff2API 是 [Freebuff](https://freebuff.com) 的 OpenAI 兼容代理服务器。本项目将标准 OpenAI API 请求转化为 Freebuff 后端格式，让你能在任何 OpenAI 兼容客户端、SDK 或命令行工具中直接使用 Freebuff 的免费模型。
+FreebuffProxy 是 [Freebuff](https://freebuff.com) 的 OpenAI 兼容代理服务器。本项目将标准 OpenAI API 请求转化为 Freebuff 后端格式，让你能在任何 OpenAI 兼容客户端、SDK 或命令行工具中直接使用 Freebuff 的免费模型。
 
 ## 核心特性
 
@@ -13,7 +13,7 @@ Freebuff2API 是 [Freebuff](https://freebuff.com) 的 OpenAI 兼容代理服务�
 
 ## 获取 Auth Token
 
-Freebuff2API 需要至少一个 Freebuff **Auth Token**。目前有以下两种获取方式：
+FreebuffProxy 需要至少一个 Freebuff **Auth Token**。目前有以下两种获取方式：
 
 ### 方式一 — 网页获取（推荐）
 
@@ -60,7 +60,7 @@ npm i -g freebuff
 
 ```json
 {
-  "LISTEN_ADDR": ":8080",
+  "LISTEN_ADDR": ":16880",
   "UPSTREAM_BASE_URL": "https://codebuff.com",
   "AUTH_TOKENS": ["token"],
   "ROTATION_INTERVAL": "6h",
@@ -74,7 +74,7 @@ npm i -g freebuff
 
 | 属性 / 环境变量 | 说明 |
 |---|---|
-| `LISTEN_ADDR` | 代理监听地址（默认 `:8080`） |
+| `LISTEN_ADDR` | 代理监听地址（默认 `:16880`） |
 | `UPSTREAM_BASE_URL` | Freebuff 后端地址（默认 `https://codebuff.com`） |
 | `AUTH_TOKENS` | Freebuff Auth Token（JSON 数组或逗号分隔的环境变量） |
 | `ROTATION_INTERVAL` | Run 自动轮换间隔（默认 `6h`） |
@@ -91,8 +91,8 @@ npm i -g freebuff
 预构建多架构镜像已发布至 GHCR：
 
 ```bash
-docker run -d --name Freebuff2API \
-  -p 8080:8080 \
+docker run -d --name FreebuffProxy \
+  -p 16880:16880 \
   -e AUTH_TOKENS="token1,token2" \
   ghcr.io/quorinex/freebuff2api:latest
 ```
@@ -100,8 +100,8 @@ docker run -d --name Freebuff2API \
 手动构建：
 
 ```bash
-docker build -t Freebuff2API .
-docker run -d -p 8080:8080 -e AUTH_TOKENS="token1,token2" Freebuff2API
+docker build -t FreebuffProxy .
+docker run -d -p 16880:16880 -e AUTH_TOKENS="token1,token2" FreebuffProxy
 ```
 
 ### 源码编译
@@ -109,10 +109,10 @@ docker run -d -p 8080:8080 -e AUTH_TOKENS="token1,token2" Freebuff2API
 **环境要求：** Go 1.23+
 
 ```bash
-git clone https://github.com/Quorinex/Freebuff2API.git
-cd Freebuff2API
-go build -o Freebuff2API .
-./Freebuff2API -config config.json
+git clone https://github.com/csy87704403/FreebuffProxy.git
+cd FreebuffProxy
+go build -o FreebuffProxy .
+./FreebuffProxy -config config.json
 ```
 
 ## 友情链接

@@ -1,0 +1,119 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>FreebuffProxy 管理面板</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,-apple-system,sans-serif;background:#0d1117;color:#c9d1d9;min-height:100vh}
+.container{max-width:1100px;margin:0 auto;padding:16px}
+h1{font-size:20px;margin-bottom:12px;color:#58a6ff}
+h2{font-size:16px;margin:12px 0 8px;color:#8b949e}
+.card{background:#161b22;border:1px solid #30363d;border-radius:8px;padding:14px;margin-bottom:14px}
+.row{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin-bottom:10px}
+.btn{background:#238636;color:#fff;border:none;border-radius:6px;padding:8px 14px;cursor:pointer;font-size:14px}
+.btn:hover{filter:brightness(1.15)}
+.btn-primary{background:#1f6feb}
+.btn-danger{background:#da3633}
+.btn[disabled]{opacity:.5;cursor:not-allowed}
+textarea{width:100%;min-height:90px;background:#0d1117;border:1px solid #30363d;border-radius:6px;color:#c9d1d9;padding:10px;font-family:inherit;font-size:14px;resize:vertical}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th,td{padding:6px 8px;text-align:left;border-bottom:1px solid #21262d}
+th{color:#8b949e;font-weight:500}
+.badge{display:inline-block;padding:2px 8px;border-radius:10px;font-size:12px;font-weight:500}
+.badge-ok{background:#1f6feb33;color:#58a6ff}
+.badge-good{background:#23863633;color:#3fb950}
+.badge-warn{background:#d2992233;color:#e3b341}
+.badge-bad{background:#da363333;color:#f85149}
+.badge-idle{background:#30363d;color:#8b949e}
+#models-chips{display:flex;flex-wrap:wrap;gap:6px;margin:8px 0}
+.chip{background:#21262d;border:1px solid #30363d;border-radius:14px;padding:3px 10px;font-size:12px}
+.chip.ok{border-color:#238636;color:#3fb950}
+.chip.err{border-color:#da3633;color:#f85149}
+.chip.time{color:#d29922}
+#chat-history{max-height:420px;overflow-y:auto;border:1px solid #30363d;border-radius:6px;padding:10px;background:#0d1117}
+.msg{margin-bottom:8px;line-height:1.5}
+.msg .role{font-weight:600;margin-right:6px}
+.msg.user .role{color:#58a6ff}
+.msg.assistant .role{color:#3fb950}
+.log-line{font-family:ui-monospace,monospace;font-size:12px;padding:2px 0;border-bottom:1px solid #21262d;word-break:break-all}
+.log-error{color:#f85149}
+.log-info{color:#58a6ff}
+.log-warn{color:#e3b341}
+.metrics{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:8px}
+.metric{background:#21262d;border-radius:8px;padding:10px 14px;min-width:120px}
+.metric .num{font-size:22px;font-weight:600;color:#58a6ff}
+.metric .label{font-size:12px;color:#8b949e}
+table.probe td:first-child{font-family:ui-monospace,monospace;font-size:12px}
+.hidden{display:none}
+#flash{margin-top:8px;font-size:13px;color:#3fb950}
+</style>
+</head>
+<body>
+<div class="container">
+<h1>FreebuffProxy 管理面板</h1>
+
+<div class="metrics" id="metrics"></div>
+
+<div class="card">
+  <div class="row">
+    <button class="btn btn-primary" id="btn-models" onclick="loadModels()">拉起模型</button>
+    <button class="btn" id="btn-probe" onclick="probeAll()">探测延迟</button>
+    <button class="btn" onclick="loadTokens()">刷新账号状态</button>
+    <button class="btn btn-danger" onclick="clearLogs()">清空日志</button>
+    <span id="flash"></span>
+  </div>
+  <div id="models-chips" class="hidden"></div>
+</div>
+
+<div class="card">
+  <h2>聊天测试</h2>
+  <div class="row">
+    <select id="chat-model" style="flex:1;min-width:200px;background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px"></select>
+    <select id="chat-stream" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:8px">
+      <option value="true">流式</option>
+      <option value="false" selected>非流式</option>
+    </select>
+  </div>
+  <textarea id="chat-input" placeholder="输入消息，回车发送..."></textarea>
+  <div class="row" style="margin-top:8px">
+    <button class="btn btn-primary" onclick="sendChat()">发送</button>
+    <button class="btn" onclick="stopChat()">停止</button>
+  </div>
+  <div id="chat-history"></div>
+</div>
+
+<div class="card">
+  <h2>账号状态（Token 池）</h2>
+  <table id="token-table"><thead><tr><th>Token</th><th>状态</th><th>模型</th><th>最后错误</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="card">
+  <h2>模型探测结果</h2>
+  <table class="probe" id="probe-table"><thead><tr><th>模型</th><th>状态</th><th>延迟</th><th>错误说明</th></tr></thead><tbody></tbody></table>
+</div>
+
+<div class="card">
+  <div class="row">
+    <h2 style="margin:0;flex:1">用量统计</h2>
+    <select id="usage-days" onchange="loadUsage()" style="background:#0d1117;color:#c9d1d9;border:1px solid #30363d;border-radius:6px;padding:6px">
+      <option value="1">今日</option>
+      <option value="7">近7天</option>
+      <option value="30">近30天</option>
+    </select>
+  </div>
+  <div class="row">
+    <div style="flex:1"><h3 style="font-size:13px;color:#8b949e">按模型</h3><table id="usage-model"><thead><tr><th>模型</th><th>Token</th></tr></thead><tbody></tbody></table></div>
+    <div style="flex:1"><h3 style="font-size:13px;color:#8b949e">按 API Key</h3><table id="usage-key"><thead><tr><th>API Key</th><th>Token</th></tr></thead><tbody></tbody></table></div>
+  </div>
+</div>
+
+<div class="card">
+  <h2>调用日志 <span style="font-size:12px;color:#8b949e">(自动清理, 最多500条)</span></h2>
+  <div id="log-box" style="max-height:300px;overflow-y:auto"></div>
+</div>
+</div>
+<script src="webui.js"></script>
+</body>
+</html>

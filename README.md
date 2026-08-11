@@ -1,8 +1,8 @@
-# Freebuff2API
+# FreebuffProxy
 
 [English](README.md) | [简体中文](README_zh.md)
 
-Freebuff2API is an OpenAI-compatible proxy server for [Freebuff](https://freebuff.com). It translates standard OpenAI API requests into Freebuff's backend format, allowing you to use Freebuff's free models with any OpenAI-compatible client, SDK, or CLI tool.
+FreebuffProxy is an OpenAI-compatible proxy server for [Freebuff](https://freebuff.com). It translates standard OpenAI API requests into Freebuff's backend format, allowing you to use Freebuff's free models with any OpenAI-compatible client, SDK, or CLI tool.
 
 ## Features
 
@@ -13,7 +13,7 @@ Freebuff2API is an OpenAI-compatible proxy server for [Freebuff](https://freebuf
 
 ## Getting Auth Tokens
 
-Freebuff2API requires one or more Freebuff **auth tokens**. There are two ways to obtain one:
+FreebuffProxy requires one or more Freebuff **auth tokens**. There are two ways to obtain one:
 
 ### Method 1 — Web (Recommended)
 
@@ -60,7 +60,7 @@ Configuration is managed via a JSON file and/or environment variables. The JSON 
 
 ```json
 {
-  "LISTEN_ADDR": ":8080",
+  "LISTEN_ADDR": ":16880",
   "UPSTREAM_BASE_URL": "https://codebuff.com",
   "AUTH_TOKENS": ["eyJhb..."],
   "ROTATION_INTERVAL": "6h",
@@ -74,7 +74,7 @@ Configuration is managed via a JSON file and/or environment variables. The JSON 
 
 | Key / Env Var | Description |
 |---|---|
-| `LISTEN_ADDR` | Proxy listen address (default `:8080`) |
+| `LISTEN_ADDR` | Proxy listen address (default `:16880`) |
 | `UPSTREAM_BASE_URL` | Freebuff backend URL (default `https://codebuff.com`) |
 | `AUTH_TOKENS` | Freebuff auth tokens (JSON array or comma-separated env var) |
 | `ROTATION_INTERVAL` | Run rotation interval (default `6h`) |
@@ -91,8 +91,8 @@ Environment variables override JSON values when both are set.
 Pre-built multi-arch images are available on GHCR:
 
 ```bash
-docker run -d --name Freebuff2API \
-  -p 8080:8080 \
+docker run -d --name FreebuffProxy \
+  -p 16880:16880 \
   -e AUTH_TOKENS="token1,token2" \
   ghcr.io/quorinex/freebuff2api:latest
 ```
@@ -100,8 +100,8 @@ docker run -d --name Freebuff2API \
 Build from source:
 
 ```bash
-docker build -t Freebuff2API .
-docker run -d -p 8080:8080 -e AUTH_TOKENS="token1,token2" Freebuff2API
+docker build -t FreebuffProxy .
+docker run -d -p 16880:16880 -e AUTH_TOKENS="token1,token2" FreebuffProxy
 ```
 
 ### Build from Source
@@ -109,10 +109,10 @@ docker run -d -p 8080:8080 -e AUTH_TOKENS="token1,token2" Freebuff2API
 **Requirements:** Go 1.23+
 
 ```bash
-git clone https://github.com/Quorinex/Freebuff2API.git
-cd Freebuff2API
-go build -o Freebuff2API .
-./Freebuff2API -config config.json
+git clone https://github.com/csy87704403/FreebuffProxy.git
+cd FreebuffProxy
+go build -o FreebuffProxy .
+./FreebuffProxy -config config.json
 ```
 
 ## Links

@@ -20,6 +20,7 @@ type Server struct {
 	runs     *RunManager
 	registry *ModelRegistry
 	started  time.Time
+	webui    *WebUI
 }
 
 func NewServer(cfg Config, logger *log.Logger, registry *ModelRegistry) *Server {
@@ -33,6 +34,7 @@ func NewServer(cfg Config, logger *log.Logger, registry *ModelRegistry) *Server 
 		runs:     runManager,
 		registry: registry,
 		started:  time.Now(),
+		webui:    NewWebUI(),
 	}
 }
 
@@ -43,6 +45,15 @@ func (s *Server) Handler() http.Handler {
 	mux.HandleFunc("/v1/chat/completions", s.handleChatCompletions)
 	mux.HandleFunc("/v1/messages", s.handleClaudeMessages)
 	mux.HandleFunc("/v1/messages/count_tokens", s.handleClaudeCountTokens)
+	// Web UI (管理接口 + 前端页面)
+	mux.HandleFunc("/", s.handleWebUIIndex)
+	mux.HandleFunc("/webui.js", s.handleWebUIScript)
+	mux.HandleFunc("/api/webui/status", s.handleWebUIStatus)
+	mux.HandleFunc("/api/webui/tokens", s.handleWebUITokens)
+	mux.HandleFunc("/api/webui/probe", s.handleWebUIProbe)
+	mux.HandleFunc("/api/webui/usage", s.handleWebUIUsage)
+	mux.HandleFunc("/api/webui/logs", s.handleWebUILogs)
+	mux.HandleFunc("/api/webui/logs/clear", s.handleWebUILogsClear)
 	return s.withMiddleware(mux)
 }
 
@@ -120,7 +131,7 @@ func (s *Server) handleModels(w http.ResponseWriter, r *http.Request) {
 			"id":         model,
 			"object":     "model",
 			"created":    created,
-			"owned_by":   "Freebuff2API",
+			"owned_by":   "FreebuffProxy",
 			"root":       model,
 			"permission": []any{},
 		})
@@ -267,6 +278,7 @@ func (s *Server) proxyChatRequest(
 	for attempt := 0; attempt < 2; attempt++ {
 		lease, err := s.runs.Acquire(r.Context(), agentID)
 		if err != nil {
+			s.webui.Log("error", "server", fmt.Sprintf("model=%s acquire run failed: %v", requestedModel, err))
 			var waitingErr *waitingRoomError
 			if errors.As(err, &waitingErr) {
 				if waitingErr.RetryAfter > 0 {
@@ -316,6 +328,18 @@ func (s *Server) proxyChatRequest(
 				s.logger.Printf("[%s] proxy response copy failed: %v", lease.pool.name, err)
 			}
 			s.logger.Printf("[%s] Request completed successfully in %v (status: %d)", lease.pool.name, time.Since(startTime).Round(time.Millisecond), resp.StatusCode)
+			// WebUI: 记录日志 + 用量
+			s.webui.Log("info", "token:"+lease.pool.name,
+				fmt.Sprintf("model=%s status=%d dur=%v", requestedModel, resp.StatusCode, time.Since(startTime).Round(time.Millisecond)))
+			apiKey := r.Header.Get("x-api-key")
+			if apiKey == "" {
+				auth := r.Header.Get("Authorization")
+				const prefix = "Bearer "
+				if strings.HasPrefix(auth, prefix) {
+					apiKey = strings.TrimSpace(strings.TrimPrefix(auth, prefix))
+				}
+			}
+			s.webui.RecordUsage(requestedModel, apiKey, 0)
 			s.runs.Release(lease)
 			return
 		}
@@ -341,6 +365,8 @@ func (s *Server) proxyChatRequest(
 
 		s.runs.Release(lease)
 		s.logger.Printf("[%s] upstream error response: %s", lease.pool.name, string(errorBody))
+		s.webui.Log("error", "token:"+lease.pool.name,
+			fmt.Sprintf("model=%s status=%d err=%s", requestedModel, resp.StatusCode, strings.TrimSpace(string(errorBody))[:180]))
 		writeUpstreamError(w, resp.StatusCode, errorBody)
 		return
 	}
@@ -372,10 +398,42 @@ func (s *Server) injectUpstreamMetadata(payload map[string]any, requestedModel, 
 	metadata["run_id"] = runID
 	metadata["cost_mode"] = "free"
 	metadata["client_id"] = generateClientSessionId()
+	metadata["trace_session_id"] = generateUUID()
+	metadata["llm_step_number"] = "1"
 	if strings.TrimSpace(sessionInstanceID) != "" {
 		metadata["freebuff_instance_id"] = sessionInstanceID
 	}
 	cloned["codebuff_metadata"] = metadata
+
+	// Python 已验证协议: 设置 stop 标记 + provider.data_collection=deny
+	if _, ok := cloned["stop"]; !ok {
+		cloned["stop"] = []any{"\"cb_easp\""}
+	}
+	if provider, ok := cloned["provider"].(map[string]any); ok {
+		provider["data_collection"] = "deny"
+	} else {
+		cloned["provider"] = map[string]any{"data_collection": "deny"}
+	}
+
+	// Python 已验证协议: 用户消息用 <user_message> 包装
+	if msgs, ok := cloned["messages"].([]any); ok {
+		wrapped := false
+		for _, m := range msgs {
+			msg, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			role, _ := msg["role"].(string)
+			content, _ := msg["content"].(string)
+			if role == "user" && content != "" && !strings.Contains(content, "<user_message>") {
+				msg["content"] = "<user_message>" + content + "</user_message>"
+				wrapped = true
+			}
+		}
+		if wrapped {
+			cloned["messages"] = msgs
+		}
+	}
 
 	body, err := json.Marshal(cloned)
 	if err != nil {
@@ -395,7 +453,7 @@ func isSessionInvalid(statusCode int, errorBody []byte) bool {
 		return false
 	}
 	switch strings.TrimSpace(payload.Error) {
-	case "freebuff_update_required", "waiting_room_required", "waiting_room_queued", "session_superseded", "session_expired":
+	case "freebuff_update_required", "waiting_room_required", "waiting_room_queued", "session_superseded", "session_expired", "session_model_mismatch":
 		return true
 	default:
 		return false

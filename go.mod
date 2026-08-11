@@ -1,6 +1,6 @@
-module github.com/Quorinex/Freebuff2API
+module github.com/csy87704403/FreebuffProxy
 
-go 1.23.0
+go 1.23
 
 require (
 	github.com/dlclark/regexp2 v1.11.5 // indirect

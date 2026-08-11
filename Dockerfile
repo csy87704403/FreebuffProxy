@@ -5,17 +5,17 @@ WORKDIR /build
 COPY go.mod go.sum ./
 RUN go mod download
 
-COPY *.go ./
+COPY *.go webui.html webui.js ./
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o /Freebuff2API .
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o /FreebuffProxy .
 
 FROM alpine:3.20
 
 RUN apk add --no-cache ca-certificates tzdata
 
-COPY --from=builder /Freebuff2API /usr/local/bin/Freebuff2API
-RUN ln -s /usr/local/bin/Freebuff2API
+COPY --from=builder /FreebuffProxy /usr/local/bin/FreebuffProxy
+RUN ln -s /usr/local/bin/FreebuffProxy
 # Expose proxy port
-EXPOSE 8080
+EXPOSE 16880
 
-ENTRYPOINT ["Freebuff2API"]
+ENTRYPOINT ["FreebuffProxy"]
