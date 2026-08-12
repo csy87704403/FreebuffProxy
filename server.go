@@ -338,20 +338,9 @@ func (s *Server) proxyChatRequest(
 
 		s.logger.Printf("[%s] Routing request (model: %s) via run: %s", lease.pool.name, requestedModel, lease.run.id)
 
-		sessionInstanceID, err := lease.pool.ensureSession(r.Context(), requestedModel)
-		if err != nil {
-			s.runs.Release(lease)
-			var waitingErr *waitingRoomError
-			if errors.As(err, &waitingErr) {
-				if waitingErr.RetryAfter > 0 {
-					w.Header().Set("Retry-After", fmt.Sprintf("%.0f", waitingErr.RetryAfter.Seconds()))
-				}
-				writeError(w, http.StatusServiceUnavailable, waitingErr.Error(), serverErrorType, "waiting_room_queued")
-				return
-			}
-			writeError(w, http.StatusBadGateway, "failed to acquire upstream free session", serverErrorType, "")
-			return
-		}
+		// acquire 已保证 session ready（内部 ensureSession + 串行化切换）
+		// 这里只读当前 instanceID，不再触发任何 session 操作（避免并发下重复切换互踩）
+		sessionInstanceID := lease.pool.currentSessionInstanceID()
 
 		upstreamBody, err := s.injectUpstreamMetadata(payload, requestedModel, lease.run.id, sessionInstanceID)
 		if err != nil {
@@ -390,7 +379,7 @@ func (s *Server) proxyChatRequest(
 		}
 
 		if isSessionInvalid(resp.StatusCode, errorBody) {
-			s.logger.Printf("%s: free session invalid, refreshing and retrying", lease.pool.name)
+			s.logger.Printf("%s: free session invalid (HTTP %d): %s", lease.pool.name, resp.StatusCode, strings.TrimSpace(string(errorBody)))
 			lease.pool.invalidateSession(strings.TrimSpace(string(errorBody)))
 			s.runs.Release(lease)
 			continue

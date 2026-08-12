@@ -29,6 +29,7 @@ type tokenPool struct {
 	logger *log.Logger
 
 	mu               sync.Mutex
+	reqMu            sync.Mutex // 请求级互斥: 同一 token 同时只处理一个请求（对齐 Python 单线程，避免 session 互踩）
 	runs             map[string]*managedRun // agentID -> current run
 	draining         []*managedRun
 	session          *cachedSession // 单例 session（上游约束: 一账号同时只有一个 active session 且锁定模型）
@@ -287,6 +288,16 @@ func (m *RunManager) Snapshots() []tokenSnapshot {
 }
 
 func (p *tokenPool) acquire(ctx context.Context, agentID, model string) (*runLease, error) {
+	// 请求级互斥：同一 token 同时只处理一个请求
+	// （对齐 Python 单线程行为；多 token 之间仍并行）
+	p.reqMu.Lock()
+	unlocked := false
+	defer func() {
+		if !unlocked {
+			p.reqMu.Unlock()
+		}
+	}()
+
 	p.mu.Lock()
 	if now := time.Now(); now.Before(p.cooldownUntil) {
 		cooldownUntil := p.cooldownUntil
@@ -323,14 +334,13 @@ func (p *tokenPool) acquire(ctx context.Context, agentID, model string) (*runLea
 	}
 	run.inflight++
 	run.requestCount++
+	unlocked = true // lease 持有 reqMu, 由 release 释放
 	return &runLease{pool: p, run: run}, nil
 }
 
 func (p *tokenPool) maintain(ctx context.Context) error {
-	if _, err := p.ensureSession(ctx, ""); err != nil {
-		p.logger.Printf("%s: refresh free session failed: %v", p.name, err)
-	}
-
+	// 不强制刷新 session —— session 完全由请求驱动切换（对齐 Python）
+	// 避免 maintain 把正在使用的 session 强切回默认模型导致 session_superseded
 	p.mu.Lock()
 	var toRotate []string
 	for agentID, run := range p.runs {
@@ -435,6 +445,9 @@ func (p *tokenPool) release(run *managedRun) {
 	if err := p.finishIfReady(run); err != nil {
 		p.logger.Printf("%s: finish released run %s failed: %v", p.name, run.id, err)
 	}
+
+	// 释放请求级互斥锁（acquire 时持有）
+	p.reqMu.Unlock()
 }
 
 func (p *tokenPool) finishIfReady(run *managedRun) error {

@@ -125,14 +125,13 @@ func (p *tokenPool) readySessionLocked(model string, now time.Time) (string, boo
 	return "", false
 }
 
-// switchSession 像素级对齐 Python: DELETE 旧 session → sleep(1) → 建新 session(目标模型) → 轮询 active
+// switchSession 像素级对齐 Python: 无条件 DELETE 旧 session → sleep(1) → 建新 session(目标模型) → 轮询 active
+// 注意: 即使本地无 session 记录也要 DELETE（上游可能残留其他模型的 session → 否则 409 model_locked）
 // 切换成功后旧 run 全部失效（绑定旧 session root），由 acquire 惰性重建
 func (p *tokenPool) switchSession(ctx context.Context, model string) (*cachedSession, string, error) {
-	// 1. 结束所有旧 session (Python: api_request DELETE /freebuff/session, except pass)
-	if p.session != nil && p.session.status != sessionStatusDisabled {
-		if err := p.client.EndSession(ctx, p.token); err != nil {
-			p.logger.Printf("%s: end old session failed (ignored): %v", p.name, err)
-		}
+	// 1. 无条件结束所有旧 session (Python: api_request DELETE /freebuff/session, except pass)
+	if err := p.client.EndSession(ctx, p.token); err != nil {
+		p.logger.Printf("%s: end old session failed (ignored): %v", p.name, err)
 	}
 	// 2. sleep 1s 对齐 Python, 避免 409 model_mismatch
 	select {
@@ -331,7 +330,7 @@ func (c *UpstreamClient) EndSession(ctx context.Context, authToken string) error
 		req.Header.Set("x-freebuff-acting-user-id", c.actingUserID)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.clientForRequest().Do(req)
 	if err != nil {
 		return fmt.Errorf("send free session delete request: %w", err)
 	}
