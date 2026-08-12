@@ -48,10 +48,13 @@ type cachedSession struct {
 	retryAfter time.Duration
 }
 
-func (p *tokenPool) ensureSession(ctx context.Context) (string, error) {
+func (p *tokenPool) ensureSession(ctx context.Context, model string) (string, error) {
+	if model == "" {
+		model = "deepseek/deepseek-v4-flash"
+	}
 	for {
 		p.mu.Lock()
-		if instanceID, ready := p.readySessionLocked(time.Now()); ready {
+		if instanceID, ready := p.readySessionLocked(model, time.Now()); ready {
 			p.mu.Unlock()
 			return instanceID, nil
 		}
@@ -72,11 +75,12 @@ func (p *tokenPool) ensureSession(ctx context.Context) (string, error) {
 		p.sessionRefreshCh = ch
 		p.mu.Unlock()
 
-		session, instanceID, err := p.refreshSession(ctx)
+		session, instanceID, err := p.switchSession(ctx, model)
 
 		p.mu.Lock()
 		if session != nil {
 			p.session = session
+			p.sessionModel = model
 		}
 		if err != nil {
 			p.session = nil
@@ -99,8 +103,12 @@ func (p *tokenPool) ensureSession(ctx context.Context) (string, error) {
 	}
 }
 
-func (p *tokenPool) readySessionLocked(now time.Time) (string, bool) {
+func (p *tokenPool) readySessionLocked(model string, now time.Time) (string, bool) {
 	if p.session == nil {
+		return "", false
+	}
+	// 上游硬约束: session 锁定模型，不匹配必须切换
+	if p.sessionModel != model {
 		return "", false
 	}
 	switch p.session.status {
@@ -117,27 +125,29 @@ func (p *tokenPool) readySessionLocked(now time.Time) (string, bool) {
 	return "", false
 }
 
-func (p *tokenPool) refreshSession(ctx context.Context) (*cachedSession, string, error) {
-	p.mu.Lock()
-	current := p.session
-	p.mu.Unlock()
-
-	var (
-		state freeSessionResponse
-		err   error
-	)
-	if current != nil && current.status == sessionStatusQueued && strings.TrimSpace(current.instanceID) != "" {
-		state, err = p.client.GetSession(ctx, p.token, current.instanceID)
-		if err != nil {
-			return nil, "", fmt.Errorf("poll free session: %w", err)
-		}
-	} else {
-		state, err = p.client.CreateOrRefreshSession(ctx, p.token)
-		if err != nil {
-			return nil, "", fmt.Errorf("start free session: %w", err)
+// switchSession 像素级对齐 Python: DELETE 旧 session → sleep(1) → 建新 session(目标模型) → 轮询 active
+// 切换成功后旧 run 全部失效（绑定旧 session root），由 acquire 惰性重建
+func (p *tokenPool) switchSession(ctx context.Context, model string) (*cachedSession, string, error) {
+	// 1. 结束所有旧 session (Python: api_request DELETE /freebuff/session, except pass)
+	if p.session != nil && p.session.status != sessionStatusDisabled {
+		if err := p.client.EndSession(ctx, p.token); err != nil {
+			p.logger.Printf("%s: end old session failed (ignored): %v", p.name, err)
 		}
 	}
+	// 2. sleep 1s 对齐 Python, 避免 409 model_mismatch
+	select {
+	case <-time.After(time.Second):
+	case <-ctx.Done():
+		return nil, "", ctx.Err()
+	}
 
+	// 3. 建新 session (Python: create_session with x-freebuff-model)
+	state, err := p.client.CreateOrRefreshSession(ctx, p.token, model)
+	if err != nil {
+		return nil, "", fmt.Errorf("start free session: %w", err)
+	}
+
+	// 4. 轮询直到 active (Python: wait_for_active)
 	for {
 		switch sessionStatus(strings.TrimSpace(state.Status)) {
 		case sessionStatusDisabled:
@@ -151,6 +161,13 @@ func (p *tokenPool) refreshSession(ctx context.Context) (*cachedSession, string,
 			if err != nil {
 				return nil, "", fmt.Errorf("parse free session expiry: %w", err)
 			}
+			// 5. 清空旧 run（旧 run 绑定旧 session root, 已失效）
+			p.mu.Lock()
+			for _, run := range p.runs {
+				p.draining = append(p.draining, run)
+			}
+			p.runs = make(map[string]*managedRun)
+			p.mu.Unlock()
 			return &cachedSession{
 				status:     sessionStatusActive,
 				instanceID: instanceID,
@@ -163,16 +180,17 @@ func (p *tokenPool) refreshSession(ctx context.Context) (*cachedSession, string,
 			}
 			p.logQueuePosition(state)
 			delay := queuedPollDelay(state)
-			return &cachedSession{
-				status:     sessionStatusQueued,
-				instanceID: instanceID,
-				position:   maxInt(state.Position, 1),
-				queueDepth: maxInt(state.QueueDepth, maxInt(state.Position, 1)),
-				pollAt:     time.Now().Add(delay),
-				retryAfter: delay,
-			}, "", nil
+			select {
+			case <-time.After(delay):
+			case <-ctx.Done():
+				return nil, "", ctx.Err()
+			}
+			state, err = p.client.GetSession(ctx, p.token, instanceID)
+			if err != nil {
+				return nil, "", fmt.Errorf("poll free session: %w", err)
+			}
 		case sessionStatusNone, sessionStatusEnded, sessionStatusSuperseded:
-			state, err = p.client.CreateOrRefreshSession(ctx, p.token)
+			state, err = p.client.CreateOrRefreshSession(ctx, p.token, model)
 			if err != nil {
 				return nil, "", fmt.Errorf("refresh free session: %w", err)
 			}
@@ -186,6 +204,7 @@ func (p *tokenPool) invalidateSession(reason string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.session = nil
+	p.sessionModel = ""
 	if reason != "" {
 		p.lastError = reason
 	}
@@ -275,6 +294,7 @@ func (p *tokenPool) endSession(ctx context.Context) error {
 	p.mu.Lock()
 	session := p.session
 	p.session = nil
+	p.sessionModel = ""
 	p.mu.Unlock()
 
 	if session == nil || session.status == sessionStatusDisabled || session.instanceID == "" {
@@ -286,8 +306,8 @@ func (p *tokenPool) endSession(ctx context.Context) error {
 	return nil
 }
 
-func (c *UpstreamClient) CreateOrRefreshSession(ctx context.Context, authToken string) (freeSessionResponse, error) {
-	return c.doSessionRequest(ctx, http.MethodPost, authToken, "", "deepseek/deepseek-v4-flash")
+func (c *UpstreamClient) CreateOrRefreshSession(ctx context.Context, authToken, model string) (freeSessionResponse, error) {
+	return c.doSessionRequest(ctx, http.MethodPost, authToken, "", model)
 }
 
 func (c *UpstreamClient) GetSession(ctx context.Context, authToken, instanceID string) (freeSessionResponse, error) {

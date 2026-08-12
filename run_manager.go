@@ -31,8 +31,9 @@ type tokenPool struct {
 	mu               sync.Mutex
 	runs             map[string]*managedRun // agentID -> current run
 	draining         []*managedRun
-	session          *cachedSession
-	sessionRefreshCh chan struct{}
+	session          *cachedSession // 单例 session（上游约束: 一账号同时只有一个 active session 且锁定模型）
+	sessionModel     string         // session 锁定的模型 (409 model_locked 实测确认)
+	sessionRefreshCh chan struct{}  // session 切换串行化 channel
 	lastError        string
 	cooldownUntil    time.Time
 }
@@ -198,7 +199,7 @@ func (m *RunManager) AddToken(token string, agentIDs []string) (bool, error) {
 }
 
 func (p *tokenPool) prewarm(ctx context.Context, agentIDs []string, logger *log.Logger) {
-	if _, err := p.ensureSession(ctx); err != nil {
+	if _, err := p.ensureSession(ctx, ""); err != nil {
 		logger.Printf("%s: free session prewarm failed: %v", p.name, err)
 	}
 	for _, agentID := range agentIDs {
@@ -220,7 +221,7 @@ func (m *RunManager) Close(ctx context.Context) {
 	}
 }
 
-func (m *RunManager) Acquire(ctx context.Context, agentID string) (*runLease, error) {
+func (m *RunManager) Acquire(ctx context.Context, agentID, model string) (*runLease, error) {
 	if len(m.pools) == 0 {
 		return nil, errors.New("no auth tokens configured")
 	}
@@ -230,7 +231,7 @@ func (m *RunManager) Acquire(ctx context.Context, agentID string) (*runLease, er
 	var waiting []*waitingRoomError
 	for offset := 0; offset < len(m.pools); offset++ {
 		pool := m.pools[(startIndex+offset)%len(m.pools)]
-		lease, err := pool.acquire(ctx, agentID)
+		lease, err := pool.acquire(ctx, agentID, model)
 		if err == nil {
 			return lease, nil
 		}
@@ -285,7 +286,7 @@ func (m *RunManager) Snapshots() []tokenSnapshot {
 	return snapshots
 }
 
-func (p *tokenPool) acquire(ctx context.Context, agentID string) (*runLease, error) {
+func (p *tokenPool) acquire(ctx context.Context, agentID, model string) (*runLease, error) {
 	p.mu.Lock()
 	if now := time.Now(); now.Before(p.cooldownUntil) {
 		cooldownUntil := p.cooldownUntil
@@ -296,14 +297,22 @@ func (p *tokenPool) acquire(ctx context.Context, agentID string) (*runLease, err
 	needsRotate := run == nil || time.Since(run.startedAt) >= p.cfg.RotationInterval
 	p.mu.Unlock()
 
+	// 先确保 session 与目标模型匹配（切换时会清空旧 run）
+	// 再 rotate run —— 这样新建的 run 不会被 session 切换清掉
+	if _, err := p.ensureSession(ctx, model); err != nil {
+		return nil, err
+	}
+
+	// ensureSession 切换后可能已清空 runs, 重新评估
+	p.mu.Lock()
+	run = p.runs[agentID]
+	needsRotate = run == nil || time.Since(run.startedAt) >= p.cfg.RotationInterval
+	p.mu.Unlock()
+
 	if needsRotate {
 		if err := p.rotateAgent(ctx, agentID); err != nil {
 			return nil, err
 		}
-	}
-
-	if _, err := p.ensureSession(ctx); err != nil {
-		return nil, err
 	}
 
 	p.mu.Lock()
@@ -318,7 +327,7 @@ func (p *tokenPool) acquire(ctx context.Context, agentID string) (*runLease, err
 }
 
 func (p *tokenPool) maintain(ctx context.Context) error {
-	if _, err := p.ensureSession(ctx); err != nil {
+	if _, err := p.ensureSession(ctx, ""); err != nil {
 		p.logger.Printf("%s: refresh free session failed: %v", p.name, err)
 	}
 

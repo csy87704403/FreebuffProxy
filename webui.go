@@ -204,7 +204,7 @@ func (s *Server) probeModel(model string) (int64, error) {
 		return 0, fmt.Errorf("no agent for model %s", model)
 	}
 	// 探测 run 可用性（从 runManager 拿一个 lease）
-	lease, err := s.runs.Acquire(context.Background(), agentID)
+	lease, err := s.runs.Acquire(context.Background(), agentID, model)
 	if err != nil {
 		return 0, err
 	}

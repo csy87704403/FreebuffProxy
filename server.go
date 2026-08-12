@@ -321,7 +321,7 @@ func (s *Server) proxyChatRequest(
 	}
 
 	for attempt := 0; attempt < 2; attempt++ {
-		lease, err := s.runs.Acquire(r.Context(), agentID)
+		lease, err := s.runs.Acquire(r.Context(), agentID, requestedModel)
 		if err != nil {
 			s.webui.Log("error", "server", fmt.Sprintf("model=%s acquire run failed: %v", requestedModel, err))
 			var waitingErr *waitingRoomError
@@ -338,7 +338,7 @@ func (s *Server) proxyChatRequest(
 
 		s.logger.Printf("[%s] Routing request (model: %s) via run: %s", lease.pool.name, requestedModel, lease.run.id)
 
-		sessionInstanceID, err := lease.pool.ensureSession(r.Context())
+		sessionInstanceID, err := lease.pool.ensureSession(r.Context(), requestedModel)
 		if err != nil {
 			s.runs.Release(lease)
 			var waitingErr *waitingRoomError
