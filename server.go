@@ -28,7 +28,7 @@ func NewServer(cfg Config, logger *log.Logger, registry *ModelRegistry) *Server 
 	client := NewUpstreamClient(cfg)
 	runManager := NewRunManager(cfg, client, logger)
 
-	return &Server{
+	s := &Server{
 		cfg:       cfg,
 		logger:    logger,
 		client:    client,
@@ -38,6 +38,11 @@ func NewServer(cfg Config, logger *log.Logger, registry *ModelRegistry) *Server 
 		webui:     NewWebUI(),
 		proxyPool: NewProxyPool("proxy_pool.json"),
 	}
+
+	// 动态出口：每个请求从 IP 池选最优代理（FULL 优先，延迟最低）
+	client.SetProxySelector(s.proxyPool.SelectBest)
+
+	return s
 }
 
 func (s *Server) Handler() http.Handler {
@@ -405,8 +410,12 @@ func (s *Server) proxyChatRequest(
 
 		s.runs.Release(lease)
 		s.logger.Printf("[%s] upstream error response: %s", lease.pool.name, string(errorBody))
+		errMsg := strings.TrimSpace(string(errorBody))
+		if len(errMsg) > 180 {
+			errMsg = errMsg[:180]
+		}
 		s.webui.Log("error", "token:"+lease.pool.name,
-			fmt.Sprintf("model=%s status=%d err=%s", requestedModel, resp.StatusCode, strings.TrimSpace(string(errorBody))[:180]))
+			fmt.Sprintf("model=%s status=%d err=%s", requestedModel, resp.StatusCode, errMsg))
 		writeUpstreamError(w, resp.StatusCode, errorBody)
 		return
 	}
@@ -423,6 +432,31 @@ func writeOpenAISuccessResponse(w http.ResponseWriter, resp *http.Response) erro
 func (s *Server) injectUpstreamMetadata(payload map[string]any, requestedModel, runID, sessionInstanceID string) ([]byte, error) {
 	cloned := cloneMap(payload)
 	cloned["model"] = requestedModel
+
+	// Python 已验证协议: 必须注入 "You are Buffy" system marker
+	// (requestHasFreebuffSystemMarker 检测, 缺失会 free_mode_cli_required)
+	// 若用户未提供 system message, 追加 Buffy 身份标志
+	if msgs, ok := cloned["messages"].([]any); ok {
+		hasSystem := false
+		for _, m := range msgs {
+			msg, ok := m.(map[string]any)
+			if !ok {
+				continue
+			}
+			if role, _ := msg["role"].(string); role == "system" {
+				hasSystem = true
+				break
+			}
+		}
+		if !hasSystem {
+			cloned["messages"] = append([]any{
+				map[string]any{
+					"role":    "system",
+					"content": "You are Buffy, the strategic coding assistant. You are the AI agent behind Freebuff, a free AI coding tool.",
+				},
+			}, msgs...)
+		}
+	}
 
 	// Normalize tool parameter schemas into a conservative subset the upstream
 	// backend can parse. This keeps LobeChat-style schemas working without

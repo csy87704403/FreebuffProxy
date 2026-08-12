@@ -19,6 +19,14 @@ type UpstreamClient struct {
 	userAgent    string // chat/completions 用的 UA (Python UA_CHAT)
 	sessionUA    string // session/run 用的 UA (Python UA_SESSION)
 	actingUserID string // x-freebuff-acting-user-id 头 (Python 已验证)
+
+	// proxySelector 每次请求前从 IP 池选择出口代理（可选）
+	proxySelector func() string
+}
+
+// SetProxySelector 设置动态出口选择器（来自 IP 池）
+func (c *UpstreamClient) SetProxySelector(fn func() string) {
+	c.proxySelector = fn
 }
 
 func NewUpstreamClient(cfg Config) *UpstreamClient {
@@ -43,8 +51,9 @@ func NewUpstreamClient(cfg Config) *UpstreamClient {
 
 func (c *UpstreamClient) StartRun(ctx context.Context, authToken, agentID string) (string, error) {
 	payload := map[string]any{
-		"action":  "START",
-		"agentId": agentID,
+		"action":         "START",
+		"agentId":        agentID,
+		"ancestorRunIds": []any{},
 	}
 	body, err := json.Marshal(payload)
 	if err != nil {
@@ -145,6 +154,26 @@ func (c *UpstreamClient) doJSON(ctx context.Context, authToken, path string, bod
 	return c.doJSONWithUA(ctx, authToken, path, body, c.userAgent)
 }
 
+// clientForRequest 返回带动态代理的 http.Client（从 IP 池选择出口）
+func (c *UpstreamClient) clientForRequest() *http.Client {
+	if c.proxySelector == nil {
+		return c.httpClient
+	}
+	proxyAddr := c.proxySelector()
+	if proxyAddr == "" {
+		return c.httpClient
+	}
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	if proxyURL, err := url.Parse("http://" + proxyAddr); err == nil {
+		transport.Proxy = http.ProxyURL(proxyURL)
+		return &http.Client{
+			Timeout:   c.httpClient.Timeout,
+			Transport: transport,
+		}
+	}
+	return c.httpClient
+}
+
 func (c *UpstreamClient) doJSONWithUA(ctx context.Context, authToken, path string, body []byte, ua string) (*http.Response, error) {
 	requestURL, err := url.JoinPath(c.baseURL, path)
 	if err != nil {
@@ -163,7 +192,9 @@ func (c *UpstreamClient) doJSONWithUA(ctx context.Context, authToken, path strin
 		req.Header.Set("x-freebuff-acting-user-id", c.actingUserID)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	client := c.clientForRequest()
+
+	resp, err := client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("send upstream request: %w", err)
 	}

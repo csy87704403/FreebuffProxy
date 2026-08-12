@@ -22,6 +22,7 @@ type Config struct {
 	APIKeys          []string
 	HTTPProxy        string
 	ActingUserID     string
+	ConfigPath       string
 }
 
 type rawConfig struct {
@@ -70,6 +71,7 @@ func loadConfig(configPath string) (Config, error) {
 		APIKeys:          dedupeStrings(cfg.APIKeys),
 		HTTPProxy:        strings.TrimSpace(cfg.HTTPProxy),
 		ActingUserID:     strings.TrimSpace(cfg.ActingUserID),
+		ConfigPath:       configPath,
 	}
 
 	switch {
@@ -187,7 +189,9 @@ func containsString(values []string, needle string) bool {
 }
 
 func generateUserAgent() string {
-	return "ai-sdk/openai-compatible/1.0.25/codebuff"
+	// 严格对齐 Python 已验证版 UA_CHAT:
+	// "ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser"
+	return "ai-sdk/openai-compatible/0.0.0-test/codebuff ai-sdk/provider-utils/3.0.25 runtime/browser"
 }
 
 // generateClientSessionId generates a per-request session ID matching the

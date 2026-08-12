@@ -20,16 +20,22 @@ const (
 )
 
 // hardcodedFallback is used when the remote fetch fails on startup.
+// Free mode agents (base2-free-*/base3-free-*) — verified working with the Python reference:
+// deepseek-v4-flash → base2-free-deepseek-flash (Python run green), mimo-v2.5 → base2-free-mimo
 var hardcodedFallback = map[string][]string{
-	"base2-free":         {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
-	"file-picker":        {"google/gemini-2.5-flash-lite"},
-	"file-picker-max":    {"google/gemini-3.1-flash-lite-preview"},
-	"file-lister":        {"google/gemini-3.1-flash-lite-preview"},
-	"researcher-web":     {"google/gemini-3.1-flash-lite-preview"},
-	"researcher-docs":    {"google/gemini-3.1-flash-lite-preview"},
-	"basher":             {"google/gemini-3.1-flash-lite-preview"},
-	"editor-lite":        {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
-	"code-reviewer-lite": {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
+	"base2-free-deepseek-flash": {"deepseek/deepseek-v4-flash"},
+	"base2-free-mimo":           {"mimo/mimo-v2.5"},
+	"base2-free":                {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
+	"base3-free-deepseek-flash": {"deepseek/deepseek-v4-flash"},
+	"base3-free-mimo":           {"mimo/mimo-v2.5"},
+	"file-picker":               {"google/gemini-2.5-flash-lite"},
+	"file-picker-max":           {"google/gemini-3.1-flash-lite-preview"},
+	"file-lister":               {"google/gemini-3.1-flash-lite-preview"},
+	"researcher-web":            {"google/gemini-3.1-flash-lite-preview"},
+	"researcher-docs":           {"google/gemini-3.1-flash-lite-preview"},
+	"basher":                    {"google/gemini-3.1-flash-lite-preview"},
+	"editor-lite":               {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
+	"code-reviewer-lite":        {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
 }
 
 // ModelRegistry fetches and caches the agent→model mapping for all free agents
@@ -148,6 +154,8 @@ func (r *ModelRegistry) refresh(ctx context.Context) error {
 	}
 
 	all := parseAllFreeModels(string(body))
+	// 合并硬编码 free agents（base2-free-*/base3-free-* 不在远程 Set 格式内）
+	all = mergeAgentModels(all, hardcodedFallback)
 	if len(all) == 0 {
 		return fmt.Errorf("no free agents found in source")
 	}
@@ -199,6 +207,19 @@ func parseAllFreeModels(source string) map[string][]string {
 		}
 	}
 	return result
+}
+
+// mergeAgentModels merges the hardcoded fallback agent→model mapping into the
+// remote-parsed result (hardcoded ones win for the same agent ID, and agents
+// missing from the remote source are added).
+func mergeAgentModels(remote, hardcoded map[string][]string) map[string][]string {
+	if remote == nil {
+		remote = make(map[string][]string)
+	}
+	for agent, models := range hardcoded {
+		remote[agent] = models
+	}
+	return remote
 }
 
 // buildModelMapping creates the model→agent reverse mapping and deduplicated model list.

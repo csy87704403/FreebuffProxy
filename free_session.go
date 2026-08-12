@@ -287,11 +287,11 @@ func (p *tokenPool) endSession(ctx context.Context) error {
 }
 
 func (c *UpstreamClient) CreateOrRefreshSession(ctx context.Context, authToken string) (freeSessionResponse, error) {
-	return c.doSessionRequest(ctx, http.MethodPost, authToken, "")
+	return c.doSessionRequest(ctx, http.MethodPost, authToken, "", "deepseek/deepseek-v4-flash")
 }
 
 func (c *UpstreamClient) GetSession(ctx context.Context, authToken, instanceID string) (freeSessionResponse, error) {
-	return c.doSessionRequest(ctx, http.MethodGet, authToken, instanceID)
+	return c.doSessionRequest(ctx, http.MethodGet, authToken, instanceID, "")
 }
 
 func (c *UpstreamClient) EndSession(ctx context.Context, authToken string) error {
@@ -327,7 +327,7 @@ func (c *UpstreamClient) EndSession(ctx context.Context, authToken string) error
 	return nil
 }
 
-func (c *UpstreamClient) doSessionRequest(ctx context.Context, method, authToken, instanceID string) (freeSessionResponse, error) {
+func (c *UpstreamClient) doSessionRequest(ctx context.Context, method, authToken, instanceID, model string) (freeSessionResponse, error) {
 	requestURL, err := url.JoinPath(c.baseURL, "/api/v1/freebuff/session")
 	if err != nil {
 		return freeSessionResponse{}, fmt.Errorf("build free session url: %w", err)
@@ -350,12 +350,17 @@ func (c *UpstreamClient) doSessionRequest(ctx context.Context, method, authToken
 	}
 	if method == http.MethodPost {
 		req.Header.Set("Content-Type", "application/json")
+		// Python 已验证协议: 创建 session 必须带 x-freebuff-model
+		if model != "" {
+			req.Header.Set("x-freebuff-model", model)
+		}
 	}
 	if method == http.MethodGet && instanceID != "" {
+		req.Header.Set("x-freebuff-compact-session", "1")
 		req.Header.Set("x-freebuff-instance-id", instanceID)
 	}
 
-	resp, err := c.httpClient.Do(req)
+	resp, err := c.clientForRequest().Do(req)
 	if err != nil {
 		return freeSessionResponse{}, fmt.Errorf("send free session request: %w", err)
 	}

@@ -1,0 +1,42 @@
+[
+  {
+    "addr": "127.0.0.1:8002",
+    "mode": "unknown",
+    "latency_ms": 1013,
+    "alive": true,
+    "last_checked": "2026-08-11T23:00:41.444187238Z",
+    "last_ok": "2026-08-11T23:00:41.444187334Z",
+    "cooldown_until": "0001-01-01T00:00:00Z",
+    "fail_count": 0
+  },
+  {
+    "addr": "127.0.0.1:8003",
+    "mode": "unknown",
+    "latency_ms": 461,
+    "alive": true,
+    "last_checked": "2026-08-11T23:00:42.336801035Z",
+    "last_ok": "2026-08-11T23:00:42.336801137Z",
+    "cooldown_until": "0001-01-01T00:00:00Z",
+    "fail_count": 0
+  },
+  {
+    "addr": "127.0.0.1:8078",
+    "mode": "unknown",
+    "latency_ms": 1362,
+    "alive": true,
+    "last_checked": "2026-08-11T23:00:44.152119875Z",
+    "last_ok": "2026-08-11T23:00:44.152119962Z",
+    "cooldown_until": "0001-01-01T00:00:00Z",
+    "fail_count": 0
+  },
+  {
+    "addr": "127.0.0.1:8080",
+    "mode": "unknown",
+    "latency_ms": 0,
+    "alive": false,
+    "last_checked": "2026-08-11T23:00:44.845814679Z",
+    "last_ok": "0001-01-01T00:00:00Z",
+    "cooldown_until": "0001-01-01T00:00:00Z",
+    "fail_count": 1
+  }
+]
