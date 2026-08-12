@@ -163,15 +163,15 @@ func (c *UpstreamClient) clientForRequest() *http.Client {
 	if proxyAddr == "" {
 		return c.httpClient
 	}
-	transport := http.DefaultTransport.(*http.Transport).Clone()
-	if proxyURL, err := url.Parse("http://" + proxyAddr); err == nil {
-		transport.Proxy = http.ProxyURL(proxyURL)
-		return &http.Client{
-			Timeout:   c.httpClient.Timeout,
-			Transport: transport,
-		}
+	// 支持 http/socks5 + 认证/无认证 的外部代理
+	transport, err := buildTransport(proxyAddr)
+	if err != nil {
+		return c.httpClient
 	}
-	return c.httpClient
+	return &http.Client{
+		Timeout:   c.httpClient.Timeout,
+		Transport: transport,
+	}
 }
 
 func (c *UpstreamClient) doJSONWithUA(ctx context.Context, authToken, path string, body []byte, ua string) (*http.Response, error) {

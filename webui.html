@@ -148,6 +148,8 @@ input[type=checkbox]{width:auto;margin-right:4px;accent-color:#58a6ff}
       <button class="btn btn-sm" onclick="probeModels()">探测延迟</button>
     </div>
     <div id="model-list" style="max-height:400px;overflow-y:auto"></div>
+    <div id="probe-progress" class="progress-bar" style="display:none"><div class="fill" id="probe-progress-fill"></div></div>
+    <div id="probe-progress-text" style="font-size:11px;color:#8b949e;display:none"></div>
   </div>
 </div>
 
@@ -159,10 +161,12 @@ input[type=checkbox]{width:auto;margin-right:4px;accent-color:#58a6ff}
       <button class="btn btn-primary btn-sm" onclick="detectAllIPs()">立即检测</button>
       <button class="btn btn-sm" onclick="saveIPPool()">保存</button>
     </div>
-    <textarea id="ip-input" placeholder="每行一个 IP:端口&#10;127.0.0.1:8002&#10;127.0.0.1:8003"></textarea>
+    <textarea id="ip-input" placeholder="每行一个代理&#10;支持: 127.0.0.1:8002 / http://host:port / http://user:pass@host:port / socks5://host:port / socks5://user:pass@host:port"></textarea>
     <button class="btn btn-sm" onclick="addIPBatch()" style="margin-top:4px">批量添加</button>
+    <div id="ip-progress" class="progress-bar" style="display:none;margin-top:10px"><div class="fill" id="ip-progress-fill"></div></div>
+    <div id="ip-progress-text" style="font-size:11px;color:#8b949e;display:none"></div>
     <div style="margin-top:10px;overflow-x:auto">
-      <table id="ip-table"><thead><tr><th>地址</th><th>模式</th><th>延迟</th><th>状态</th><th>失败</th><th>操作</th></tr></thead><tbody></tbody></table>
+      <table id="ip-table"><thead><tr><th>地址</th><th>模式</th><th>延迟</th><th>状态</th><th>失败</th><th>细分类别</th><th>操作</th></tr></thead><tbody></tbody></table>
     </div>
   </div>
 </div>
@@ -171,7 +175,10 @@ input[type=checkbox]{width:auto;margin-right:4px;accent-color:#58a6ff}
 <div class="page" id="page-apis">
   <div class="card">
     <h2>Base URL</h2>
-    <p><code id="base-url" style="font-size:14px"></code></p>
+    <div class="row" style="align-items:center">
+      <code id="base-url" style="font-size:14px;flex:1"></code>
+      <button class="btn btn-sm btn-outline" onclick="copyBaseURL()">复制</button>
+    </div>
     <p style="font-size:12px;color:#8b949e;margin-top:4px">外部客户端通过此地址与本代理通信</p>
   </div>
   <div class="card">
@@ -183,7 +190,7 @@ input[type=checkbox]{width:auto;margin-right:4px;accent-color:#58a6ff}
       <input id="api-key-input" placeholder="sk-xxx..." style="flex:1;min-width:120px" />
       <button class="btn btn-primary btn-sm" onclick="createAPIKey()">创建</button>
     </div>
-    <table id="api-table" style="margin-top:6px"><thead><tr><th>Key</th><th>操作</th></tr></thead><tbody></tbody></table>
+    <table id="api-table" style="margin-top:6px"><thead><tr><th>Key</th><th>复制</th><th>操作</th></tr></thead><tbody></tbody></table>
   </div>
 </div>
 

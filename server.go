@@ -88,6 +88,12 @@ func (s *Server) Handler() http.Handler {
 
 func (s *Server) Start(ctx context.Context) {
 	s.runs.Start(ctx, s.registry.AgentIDs())
+	// IP 池定时自检 (每 5 分钟)
+	authToken := ""
+	if len(s.cfg.AuthTokens) > 0 {
+		authToken = s.cfg.AuthTokens[0]
+	}
+	s.proxyPool.Start(ctx, authToken, s.logger)
 }
 
 func (s *Server) Shutdown(ctx context.Context) {

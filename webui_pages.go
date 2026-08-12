@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"os"
 	"strings"
@@ -106,14 +107,46 @@ func (s *Server) handleWebUIModelToggle(w http.ResponseWriter, r *http.Request) 
 // ============ API Keys 管理 ============
 
 func (s *Server) handleWebUIApis(w http.ResponseWriter, r *http.Request) {
-	baseURL := s.cfg.UpstreamBaseURL
-	if baseURL == "" {
-		baseURL = "http://" + s.cfg.ListenAddr
-	}
+	// 对外 API base_url = 本代理对外地址（给客户端用的 OpenAI 兼容入口）
+	// 不是上游 freebuff 的 UPSTREAM_BASE_URL
+	baseURL := publicBaseURL(r, s.cfg.ListenAddr)
 	writeJSON(w, http.StatusOK, map[string]any{
 		"base_url": baseURL,
 		"apis":     s.cfg.APIKeys,
 	})
+}
+
+// publicBaseURL 推导本服务对外 base url：
+// 优先 X-Forwarded-*（Cloudflare 隧道/反代）→ Host → ListenAddr
+func publicBaseURL(r *http.Request, listenAddr string) string {
+	base := ""
+	if host := strings.TrimSpace(r.Header.Get("X-Forwarded-Host")); host != "" {
+		scheme := strings.TrimSpace(r.Header.Get("X-Forwarded-Proto"))
+		if scheme == "" {
+			scheme = "https"
+		}
+		base = scheme + "://" + host
+	} else if host := strings.TrimSpace(r.Host); host != "" {
+		scheme := "http"
+		if r.TLS != nil || r.Header.Get("X-Forwarded-Proto") == "https" {
+			scheme = "https"
+		}
+		base = scheme + "://" + host
+	} else {
+		addr := strings.TrimSpace(listenAddr)
+		if addr == "" {
+			addr = ":16880"
+		}
+		if strings.HasPrefix(addr, ":") {
+			base = "http://127.0.0.1" + addr
+		} else {
+			base = "http://" + addr
+		}
+	}
+	if !strings.HasSuffix(base, "/v1") {
+		base += "/v1"
+	}
+	return base
 }
 
 func (s *Server) handleWebUIApiCreate(w http.ResponseWriter, r *http.Request) {
@@ -238,27 +271,81 @@ func (s *Server) handleProxyPool(w http.ResponseWriter, r *http.Request) {
 	case "save":
 		s.proxyPool.save()
 		writeJSON(w, http.StatusOK, map[string]any{"ok": true})
+	case "check":
+		// 单个 IP 检测: 复用 CheckProxy (连通性 + FULL/LIMITED 模式)
+		addr := strings.TrimSpace(payload.Addr)
+		if addr == "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"error": "addr required"})
+			return
+		}
+		authToken := ""
+		if len(s.cfg.AuthTokens) > 0 {
+			authToken = s.cfg.AuthTokens[0]
+		}
+		entry := s.proxyPool.Find(addr)
+		if entry == nil {
+			writeJSON(w, http.StatusNotFound, map[string]any{"error": "addr not found"})
+			return
+		}
+		s.proxyPool.CheckProxy(entry, authToken)
+		s.proxyPool.save()
+		writeJSON(w, http.StatusOK, map[string]any{
+			"ok":          true,
+			"addr":        entry.Addr,
+			"mode":        entry.Mode,
+			"latency_ms":  entry.LatencyMs,
+			"alive":       entry.Alive,
+			"fail_count":  entry.FailCount,
+			"cooldown_until": entry.CooldownUntil,
+		})
 	default:
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "unknown action"})
 	}
 }
 
 func (s *Server) handleProxyRefresh(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
+	// SSE 流式返回检测进度，避免长时间阻塞无反馈
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "streaming unsupported"})
 		return
 	}
-	// 获取第一个 token 做模式检测
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	writeSSE := func(data map[string]any) {
+		b, _ := json.Marshal(data)
+		fmt.Fprintf(w, "data: %s\n\n", b)
+		flusher.Flush()
+	}
+
 	authToken := ""
 	if len(s.cfg.AuthTokens) > 0 {
 		authToken = s.cfg.AuthTokens[0]
 	}
 	entries := s.proxyPool.Entries()
-	for _, e := range entries {
+	total := len(entries)
+	for i, e := range entries {
 		s.proxyPool.CheckProxy(e, authToken)
+		// 逐个推送进度
+		writeSSE(map[string]any{
+			"type":     "progress",
+			"done":     i + 1,
+			"total":    total,
+			"addr":     e.Addr,
+			"mode":     e.Mode,
+			"latency_ms": e.LatencyMs,
+			"alive":    e.Alive,
+		})
+		select {
+		case <-r.Context().Done():
+			return
+		default:
+		}
 		time.Sleep(200 * time.Millisecond) // 避免太频繁
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "checked": len(entries)})
+	s.proxyPool.save()
+	writeSSE(map[string]any{"type": "done", "checked": total})
 }
 
 func (s *Server) handleProxySelect(w http.ResponseWriter, r *http.Request) {

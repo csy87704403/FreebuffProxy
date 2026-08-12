@@ -193,6 +193,11 @@ async function toggleModel(modelId, enabled) {
 async function probeModels() {
   const btn = document.querySelector('#page-accounts .btn-primary+.btn');
   if(btn) { btn.disabled=true; btn.textContent='探测中...'; }
+  // 进度条: 探测是单请求无法流式, 用不确定动画(左右滑动)表示进行中
+  const pbar=document.getElementById('probe-progress'); if(pbar) pbar.style.display='block';
+  const pfill=document.getElementById('probe-progress-fill');
+  const ptext=document.getElementById('probe-progress-text');
+  if(pfill) pfill.style.width='40%'; if(ptext) ptext.textContent='正在探测模型延迟...';
   try {
     const results = await api('/api/webui/probe');
     if(allModels.length) {
@@ -201,9 +206,14 @@ async function probeModels() {
         if(r) { m.status=r.status; m.latency_ms=r.latency_ms; m.error_code=r.error_code; }
       });
     }
+    if(pfill) pfill.style.width='100%'; if(ptext) ptext.textContent='探测完成';
     renderModelList();
     flash('探测完成');
-  } catch(e) { flash('探测失败: '+e.message, true); }
+    setTimeout(()=>{ if(pbar) pbar.style.display='none'; },2000);
+  } catch(e) {
+    flash('探测失败: '+e.message, true);
+    if(pbar) pbar.style.display='none';
+  }
   if(btn) { btn.disabled=false; btn.textContent='探测延迟'; }
 }
 
@@ -232,6 +242,7 @@ function renderIPTable() {
       <td>${p.latency_ms?p.latency_ms+'ms':'—'}</td>
       <td>${p.alive?'✅':'❌'}</td>
       <td>${p.fail_count||0}</td>
+      <td style="font-size:11px;color:#8b949e">${p.detail||'—'}</td>
       <td><button class="btn btn-sm btn-danger" onclick="delIP(${i})">删除</button></td>
     `;
     tb.appendChild(tr);
@@ -253,13 +264,49 @@ function addIPBatch() {
 async function detectAllIPs() {
   const btn = document.querySelector('#page-ips .btn-primary');
   if(btn) btn.disabled=true;
-  flash('检测中...');
+  // 显示进度条
+  const pbar=document.getElementById('ip-progress'); if(pbar) pbar.style.display='block';
+  const fill=document.getElementById('ip-progress-fill');
+  const ptext=document.getElementById('ip-progress-text');
+  if(fill) fill.style.width='0%'; if(ptext) ptext.textContent='准备检测...';
   try {
-    await api('/api/webui/proxy/refresh',{method:'POST'});
+    const resp = await fetch('/api/webui/proxy/refresh',{method:'POST'});
+    if(!resp.ok) throw new Error('HTTP '+resp.status);
+    const reader = resp.body.getReader();
+    const decoder = new TextDecoder();
+    let buf='';
+    while(true) {
+      const {done,value} = await reader.read();
+      if(done) break;
+      buf += decoder.decode(value,{stream:true});
+      // 解析 SSE data 行
+      let idx;
+      while((idx=buf.indexOf('\n\n'))!==-1) {
+        const chunk=buf.slice(0,idx); buf=buf.slice(idx+2);
+        for(const line of chunk.split('\n')){
+          if(line.startsWith('data: ')){
+            try{
+              const d=JSON.parse(line.slice(6));
+              if(d.type==='progress'){
+                if(fill) fill.style.width=Math.round((d.done/d.total)*100)+'%';
+                if(ptext) ptext.textContent=`检测 ${d.addr}: ${d.mode} (${d.done}/${d.total})`;
+              } else if(d.type==='done'){
+                if(fill) fill.style.width='100%';
+                if(ptext) ptext.textContent=`全部检测完成 (${d.checked} 个)`;
+              }
+            }catch(e){}
+          }
+        }
+      }
+    }
     flash('检测完成');
     loadIPPool();
-  } catch(e) { flash('检测失败: '+e.message, true); }
+  } catch(e) {
+    flash('检测失败: '+e.message, true);
+    if(pbar) pbar.style.display='none';
+  }
   if(btn) btn.disabled=false;
+  setTimeout(()=>{ if(pbar) pbar.style.display='none'; },3000);
 }
 
 function saveIPPool() {
@@ -286,15 +333,35 @@ async function loadAPIKeys() {
   } catch(e) { /* 忽略 */ }
 }
 
+// 复制函数
+function copyBaseURL() {
+  const baseURL = document.getElementById('base-url').textContent;
+  navigator.clipboard.writeText(baseURL).then(() => flash('Base URL 已复制'));
+}
+
+function copyAPIKey(key) {
+  navigator.clipboard.writeText(key).then(() => flash('API Key 已复制'));
+}
+
+// 修改 renderAPITable 函数，添加复制按钮
+// 修改 renderAPITable 函数，添加复制按钮
 function renderAPITable(keys) {
   const tb = $('#api-table tbody');
   tb.innerHTML = '';
   keys.forEach(k => {
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td><code>${k}</code></td><td><button class="btn btn-sm btn-danger" onclick="delAPIKey('${k}')">删除</button></td>`;
+    tr.innerHTML = `
+      <td><code>${k}</code></td>
+      <td>
+        <button class="btn btn-sm btn-outline" onclick="copyAPIKey('${k}')">复制</button>
+      </td>
+      <td>
+        <button class="btn btn-sm btn-danger" onclick="delAPIKey('${k}')">删除</button>
+      </td>
+    `;
     tb.appendChild(tr);
   });
-  if(!keys.length) tb.innerHTML = '<tr><td colspan="2" style="color:#8b949e">暂无API Key</td></tr>';
+  if(!keys.length) tb.innerHTML = '<tr><td colspan="3" style="color:#8b949e">暂无API Key</td></tr>';
 }
 
 async function createAPIKey() {

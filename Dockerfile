@@ -1,13 +1,15 @@
-FROM golang:1.23-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 WORKDIR /build
 
 COPY go.mod go.sum ./
-RUN go mod download
+COPY vendor ./vendor
+# 使用 vendored 依赖, 无需网络下载 (x/net 用于 socks5)
+RUN go mod download 2>/dev/null || true
 
 COPY *.go webui.html webui.js ./
 
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -trimpath -o /FreebuffProxy .
+RUN CGO_ENABLED=0 GOOS=linux go build -mod=vendor -ldflags="-s -w" -trimpath -o /FreebuffProxy .
 
 FROM alpine:3.20
 
