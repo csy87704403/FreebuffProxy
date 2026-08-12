@@ -16,6 +16,7 @@ type Config struct {
 	ListenAddr       string
 	UpstreamBaseURL  string
 	AuthTokens       []string
+	AuthMeta         map[string]string // token -> email (OAuth 导入时记录)
 	RotationInterval time.Duration
 	RequestTimeout   time.Duration
 	UserAgent        string
@@ -26,14 +27,15 @@ type Config struct {
 }
 
 type rawConfig struct {
-	ListenAddr       string   `json:"LISTEN_ADDR"`
-	UpstreamBaseURL  string   `json:"UPSTREAM_BASE_URL"`
-	AuthTokens       []string `json:"AUTH_TOKENS"`
-	RotationInterval string   `json:"ROTATION_INTERVAL"`
-	RequestTimeout   string   `json:"REQUEST_TIMEOUT"`
-	APIKeys          []string `json:"API_KEYS"`
-	HTTPProxy        string   `json:"HTTP_PROXY"`
-	ActingUserID     string   `json:"ACTING_USER_ID"`
+	ListenAddr       string            `json:"LISTEN_ADDR"`
+	UpstreamBaseURL  string            `json:"UPSTREAM_BASE_URL"`
+	AuthTokens       []string          `json:"AUTH_TOKENS"`
+	AuthMeta         map[string]string `json:"AUTH_META"`
+	RotationInterval string            `json:"ROTATION_INTERVAL"`
+	RequestTimeout   string            `json:"REQUEST_TIMEOUT"`
+	APIKeys          []string          `json:"API_KEYS"`
+	HTTPProxy        string            `json:"HTTP_PROXY"`
+	ActingUserID     string            `json:"ACTING_USER_ID"`
 }
 
 func loadConfig(configPath string) (Config, error) {
@@ -65,6 +67,7 @@ func loadConfig(configPath string) (Config, error) {
 		ListenAddr:       strings.TrimSpace(cfg.ListenAddr),
 		UpstreamBaseURL:  normalizeUpstreamBaseURL(cfg.UpstreamBaseURL),
 		AuthTokens:       dedupeStrings(cfg.AuthTokens),
+		AuthMeta:         cfg.AuthMeta,
 		RotationInterval: rotationInterval,
 		RequestTimeout:   requestTimeout,
 		UserAgent:        generateUserAgent(),

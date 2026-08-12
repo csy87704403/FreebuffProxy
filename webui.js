@@ -79,12 +79,9 @@ function cancelAuth() {
 async function verifyAuth() {
   const raw = $('#auth-callback-input').value.trim();
   if(!raw) { flash('请粘贴回调URL',true); return; }
-  let code = raw;
-  if(raw.includes('auth_code=')) { try{ const u=new URL(raw); code=u.searchParams.get('auth_code'); }catch(e){} }
-  if(!code||code.split('.').length<3) { flash('URL格式不对，请粘贴完整回调URL',true); return; }
-  if(authSession&&authSession.fingerprintId) {
-    if(code.split('.')[0]!==authSession.fingerprintId) { flash('Fingerprint不匹配，请重新生成链接',true); return; }
-  }
+  // 官方 freebuff.com 认证: auth_code 是纯字符串(无点), 不等于 fingerprintId。
+  // 这里只需确认粘贴了内容(可选含 auth_code 的完整URL), 直接进入轮询 status 拿 token。
+  // (官方 token 靠 GET /api/auth/cli/status 轮询获得, 与 auth_code 的 fingerprint 无关)
   const btn = document.querySelector('#auth-step2 .btn-primary');
   btn.disabled=true; btn.textContent='验证中...';
   $('#auth-progress').style.display='block';
@@ -132,7 +129,7 @@ async function refreshAccounts() {
     tb.innerHTML = '';
     if(!snaps.length) { tb.innerHTML='<tr><td colspan="5" style="color:#8b949e">暂无账号</td></tr>'; return; }
     snaps.forEach(s => {
-      const name = s.name||(s.token?s.token.slice(0,8)+'***':'Token');
+      const name = s.email || s.name || (s.token?s.token.slice(0,8)+'***':'Token');
       let st,cls;
       if(s.cooldown_until&&new Date(s.cooldown_until)>new Date()) { st='冷却'; cls='badge-warn'; }
       else if(s.last_error) { st='异常'; cls='badge-bad'; }

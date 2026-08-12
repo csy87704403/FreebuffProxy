@@ -24,6 +24,7 @@ type RunManager struct {
 type tokenPool struct {
 	name   string
 	token  string
+	email  string // 账号邮箱 (OAuth 登录导入时记录)
 	cfg    Config
 	client *UpstreamClient
 	logger *log.Logger
@@ -55,6 +56,8 @@ type runLease struct {
 
 type tokenSnapshot struct {
 	Name              string        `json:"name"`
+	Token             string        `json:"token,omitempty"`
+	Email             string        `json:"email,omitempty"`
 	Runs              []runSnapshot `json:"runs"`
 	DrainingRuns      int           `json:"draining_runs"`
 	SessionStatus     string        `json:"session_status,omitempty"`
@@ -110,6 +113,7 @@ func NewRunManager(cfg Config, client *UpstreamClient, logger *log.Logger) *RunM
 		pools = append(pools, &tokenPool{
 			name:   fmt.Sprintf("token-%d", index+1),
 			token:  token,
+			email:  cfg.AuthMeta[token],
 			cfg:    cfg,
 			client: client,
 			runs:   make(map[string]*managedRun),
@@ -164,7 +168,7 @@ func (m *RunManager) prewarm(agentIDs []string) {
 }
 
 // AddToken 运行时添加新 token 到池中，热重载无需重启
-func (m *RunManager) AddToken(token string, agentIDs []string) (bool, error) {
+func (m *RunManager) AddToken(token, email string, agentIDs []string) (bool, error) {
 	// 去重
 	for _, pool := range m.pools {
 		if pool.token == token {
@@ -176,6 +180,7 @@ func (m *RunManager) AddToken(token string, agentIDs []string) (bool, error) {
 	pool := &tokenPool{
 		name:   fmt.Sprintf("token-%d", nextIndex),
 		token:  token,
+		email:  email,
 		cfg:    m.cfg,
 		client: nil,
 		runs:   make(map[string]*managedRun),
@@ -197,6 +202,18 @@ func (m *RunManager) AddToken(token string, agentIDs []string) (bool, error) {
 
 	m.logger.Printf("Added token %s (total: %d)", pool.name, len(m.pools))
 	return true, nil
+}
+
+// RemoveToken 从运行池移除 token（管理面板删除账号用）
+func (m *RunManager) RemoveToken(token string) bool {
+	for i, pool := range m.pools {
+		if pool.token == token {
+			m.pools = append(m.pools[:i], m.pools[i+1:]...)
+			m.logger.Printf("Removed token %s (total: %d)", pool.name, len(m.pools))
+			return true
+		}
+	}
+	return false
 }
 
 func (p *tokenPool) prewarm(ctx context.Context, agentIDs []string, logger *log.Logger) {
@@ -526,6 +543,8 @@ func (p *tokenPool) snapshot() tokenSnapshot {
 
 	snapshot := tokenSnapshot{
 		Name:          p.name,
+		Token:         p.token,
+		Email:         p.email,
 		DrainingRuns:  len(p.draining),
 		CooldownUntil: p.cooldownUntil,
 		LastError:     p.lastError,

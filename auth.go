@@ -6,11 +6,13 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
+	"time"
 )
 
-// FreebuffAuthAPI 指回 freebuff.llm.pm 的认证后端
-const authBackendBase = "https://freebuff.llm.pm"
+// FreebuffAuthAPI 官方认证后端（freebuff.com，非旧的 freebuff.llm.pm 第三方）
+const authBackendBase = "https://freebuff.com"
 
 // session 生成请求的响应
 type authCodeResponse struct {
@@ -36,33 +38,46 @@ type authStatusResponse struct {
 }
 // ============ HTTP Handlers ============
 
-// handleAuthCode 代理 POST /api/code 到 freebuff.llm.pm
+// handleAuthCode 代理 POST /api/auth/cli/code 到官方 freebuff.com
+// 官方协议: POST body {"fingerprintId": "..."}, 响应 {fingerprintId, fingerprintHash, loginUrl, expiresAt, expiresInMs}
 func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
 
-	resp, err := http.Post(authBackendBase+"/api/code", "application/json", nil)
+	// 生成官方指纹 ID (codebuff-sdk-随机base36, 对齐官方 CLI)
+	fingerprintID := "codebuff-sdk-" + generateClientSessionId()
+	body, _ := json.Marshal(map[string]string{"fingerprintId": fingerprintID})
+
+	req, err := http.NewRequest(http.MethodPost, authBackendBase+"/api/auth/cli/code", bytes.NewReader(body))
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "create request: " + err.Error()})
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	resp, err := client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream call failed: " + err.Error()})
 		return
 	}
 	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
+	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "read upstream response: " + err.Error()})
 		return
 	}
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream status " + fmt.Sprint(resp.StatusCode) + ": " + string(body)})
+		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream status " + fmt.Sprint(resp.StatusCode) + ": " + string(respBody)})
 		return
 	}
 
 	var parsed authCodeResponse
-	if err := json.Unmarshal(body, &parsed); err != nil {
+	if err := json.Unmarshal(respBody, &parsed); err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "parse upstream response: " + err.Error()})
 		return
 	}
@@ -70,21 +85,43 @@ func (s *Server) handleAuthCode(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, parsed)
 }
 
-// handleAuthStatus 代理 POST /api/status 到 freebuff.llm.pm（轮询拿 token）
+// handleAuthStatus 代理 GET /api/auth/cli/status 到官方 freebuff.com（轮询拿 token）
+// 官方协议: GET ?fingerprintId=..&fingerprintHash=..&expiresAt=..
+// 响应: {pending:true} 未完成 | {user:{id,name,email,authToken,fingerprintId,fingerprintHash}} 已登录
 func (s *Server) handleAuthStatus(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		writeJSON(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 		return
 	}
 
+	var bodyReq struct {
+		FingerprintID   string `json:"fingerprintId"`
+		FingerprintHash string `json:"fingerprintHash"`
+		ExpiresAt       int64  `json:"expiresAt"`
+	}
 	bodyBytes, err := io.ReadAll(r.Body)
 	if err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "read body: " + err.Error()})
 		return
 	}
+	if err := json.Unmarshal(bodyBytes, &bodyReq); err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+		return
+	}
 
-	// 代理到 upstream
-	upstreamResp, err := http.Post(authBackendBase+"/api/status", "application/json", bytes.NewReader(bodyBytes))
+	// 官方是 GET + query
+	q := url.Values{}
+	q.Set("fingerprintId", bodyReq.FingerprintID)
+	q.Set("fingerprintHash", bodyReq.FingerprintHash)
+	q.Set("expiresAt", fmt.Sprint(bodyReq.ExpiresAt))
+	req, err := http.NewRequest(http.MethodGet, authBackendBase+"/api/auth/cli/status?"+q.Encode(), nil)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "create request: " + err.Error()})
+		return
+	}
+
+	client := &http.Client{Timeout: 20 * time.Second}
+	upstreamResp, err := client.Do(req)
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"error": "upstream call failed: " + err.Error()})
 		return
@@ -171,6 +208,15 @@ func (s *Server) handleAuthImport(w http.ResponseWriter, r *http.Request) {
 	if !already {
 		tokens = append(tokens, payload.AuthToken)
 		cfg["AUTH_TOKENS"] = tokens
+		// 记录邮箱映射 (token -> email)
+		if payload.Email != "" {
+			meta, _ := cfg["AUTH_META"].(map[string]any)
+			if meta == nil {
+				meta = make(map[string]any)
+			}
+			meta[payload.AuthToken] = payload.Email
+			cfg["AUTH_META"] = meta
+		}
 		updated, _ := json.MarshalIndent(cfg, "", "  ")
 		if err := os.WriteFile(configPath, updated, 0644); err != nil {
 			writeJSON(w, http.StatusInternalServerError, map[string]any{"error": "write config: " + err.Error()})
@@ -178,7 +224,7 @@ func (s *Server) handleAuthImport(w http.ResponseWriter, r *http.Request) {
 		}
 		// 热重载：加入 token 池
 		agentIDs := s.registry.AgentIDs()
-		if added, err := s.runs.AddToken(payload.AuthToken, agentIDs); err != nil {
+		if added, err := s.runs.AddToken(payload.AuthToken, payload.Email, agentIDs); err != nil {
 			s.webui.Log("error", "auth", "hot reload token failed: "+err.Error())
 		} else if added {
 			s.webui.Log("info", "auth", "added token via OAuth: "+payload.Email)

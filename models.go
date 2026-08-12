@@ -22,20 +22,20 @@ const (
 // hardcodedFallback is used when the remote fetch fails on startup.
 // Free mode agents (base2-free-*/base3-free-*) — verified working with the Python reference:
 // deepseek-v4-flash → base2-free-deepseek-flash (Python run green), mimo-v2.5 → base2-free-mimo
+// NOTE: minimax/glm 实测 403 free_mode_invalid_agent_model —— 不列入
 var hardcodedFallback = map[string][]string{
 	"base2-free-deepseek-flash": {"deepseek/deepseek-v4-flash"},
 	"base2-free-mimo":           {"mimo/mimo-v2.5"},
-	"base2-free":                {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
 	"base3-free-deepseek-flash": {"deepseek/deepseek-v4-flash"},
 	"base3-free-mimo":           {"mimo/mimo-v2.5"},
-	"file-picker":               {"google/gemini-2.5-flash-lite"},
-	"file-picker-max":           {"google/gemini-3.1-flash-lite-preview"},
-	"file-lister":               {"google/gemini-3.1-flash-lite-preview"},
-	"researcher-web":            {"google/gemini-3.1-flash-lite-preview"},
-	"researcher-docs":           {"google/gemini-3.1-flash-lite-preview"},
-	"basher":                    {"google/gemini-3.1-flash-lite-preview"},
-	"editor-lite":               {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
-	"code-reviewer-lite":        {"minimax/minimax-m2.7", "z-ai/glm-5.1"},
+}
+
+// verifiedFreeModels 实测可用的 free 模型白名单（其余一律不对外暴露）:
+// 实测 deepseek/mimo 可用, minimax/glm 403 free_mode_invalid_agent_model,
+// gemini 等 picker agent 403 free_mode_invalid_agent_hierarchy
+var verifiedFreeModels = map[string]bool{
+	"deepseek/deepseek-v4-flash": true,
+	"mimo/mimo-v2.5":             true,
 }
 
 // ModelRegistry fetches and caches the agent→model mapping for all free agents
@@ -224,10 +224,20 @@ func mergeAgentModels(remote, hardcoded map[string][]string) map[string][]string
 
 // buildModelMapping creates the model→agent reverse mapping and deduplicated model list.
 // When a model appears in multiple agents, one is chosen at random.
+// 只保留 root agent（base2-free-*/base3-free-*）映射的模型 —— 对齐 Python 版 AGENT_MAP:
+// 非 root agent（file-picker/file-lister/researcher-*/basher 等）直接 chat 会
+// free_mode_invalid_agent_hierarchy（实测 gemini 403）
+// 再叠加 verifiedFreeModels 白名单: minimax/glm 实测 403 free_mode_invalid_agent_model
 func buildModelMapping(agentModels map[string][]string) (map[string]string, []string) {
 	modelAgents := make(map[string][]string)
 	for agentID, models := range agentModels {
+		if !isRootFreeAgent(agentID) {
+			continue
+		}
 		for _, model := range models {
+			if !verifiedFreeModels[model] {
+				continue
+			}
 			modelAgents[model] = append(modelAgents[model], agentID)
 		}
 	}
@@ -240,4 +250,11 @@ func buildModelMapping(agentModels map[string][]string) (map[string]string, []st
 	}
 	sort.Strings(allModels)
 	return modelToAgent, allModels
+}
+
+// isRootFreeAgent 判断 agent 是否为 free mode root agent
+// 包括: base2-free / base3-free 本身, 以及 base2-free-* / base3-free-* 系列
+func isRootFreeAgent(agentID string) bool {
+	return agentID == "base2-free" || agentID == "base3-free" ||
+		strings.HasPrefix(agentID, "base2-free-") || strings.HasPrefix(agentID, "base3-free-")
 }

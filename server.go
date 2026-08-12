@@ -357,6 +357,24 @@ func (s *Server) proxyChatRequest(
 		}
 
 		if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+			// 用量统计: 非流式响应预读 body 解析 usage.total_tokens（对齐 Python）
+			usageTokens := 0
+			ct := resp.Header.Get("Content-Type")
+			if !strings.Contains(ct, "text/event-stream") {
+				bodyBytes, readErr := io.ReadAll(resp.Body)
+				resp.Body.Close()
+				if readErr == nil {
+					var parsed struct {
+						Usage struct {
+							TotalTokens int `json:"total_tokens"`
+						} `json:"usage"`
+					}
+					if json.Unmarshal(bodyBytes, &parsed) == nil {
+						usageTokens = parsed.Usage.TotalTokens
+					}
+					resp.Body = io.NopCloser(bytes.NewReader(bodyBytes))
+				}
+			}
 			defer resp.Body.Close()
 			if err := writeSuccess(w, resp); err != nil && !errors.Is(err, context.Canceled) {
 				s.logger.Printf("[%s] proxy response copy failed: %v", lease.pool.name, err)
@@ -364,7 +382,7 @@ func (s *Server) proxyChatRequest(
 			s.logger.Printf("[%s] Request completed successfully in %v (status: %d)", lease.pool.name, time.Since(startTime).Round(time.Millisecond), resp.StatusCode)
 			// WebUI: 记录日志 + 用量
 			s.webui.Log("info", "token:"+lease.pool.name,
-				fmt.Sprintf("model=%s status=%d dur=%v", requestedModel, resp.StatusCode, time.Since(startTime).Round(time.Millisecond)))
+				fmt.Sprintf("model=%s status=%d dur=%v tokens=%d", requestedModel, resp.StatusCode, time.Since(startTime).Round(time.Millisecond), usageTokens))
 			apiKey := r.Header.Get("x-api-key")
 			if apiKey == "" {
 				auth := r.Header.Get("Authorization")
@@ -373,7 +391,7 @@ func (s *Server) proxyChatRequest(
 					apiKey = strings.TrimSpace(strings.TrimPrefix(auth, prefix))
 				}
 			}
-			s.webui.RecordUsage(requestedModel, apiKey, 0)
+			s.webui.RecordUsage(requestedModel, apiKey, usageTokens)
 			s.runs.Release(lease)
 			return
 		}

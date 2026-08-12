@@ -28,7 +28,7 @@ func (s *Server) handleAuthAccountDelete(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// 从 config 删除
+	// 从 config 删除 (AUTH_TOKENS + AUTH_META)
 	cfgPath := s.cfg.ConfigPath
 	if cfgPath == "" {
 		cfgPath = "config.json"
@@ -45,10 +45,18 @@ func (s *Server) handleAuthAccountDelete(w http.ResponseWriter, r *http.Request)
 				}
 			}
 			cfg["AUTH_TOKENS"] = newTokens
+			// 同步删除邮箱映射
+			if meta, ok := cfg["AUTH_META"].(map[string]any); ok {
+				delete(meta, payload.Token)
+				cfg["AUTH_META"] = meta
+			}
 			updated, _ := json.MarshalIndent(cfg, "", "  ")
 			os.WriteFile(cfgPath, updated, 0644)
 		}
 	}
+
+	// 从运行池移除（关键: 之前只改 config 不删池, 导致刷新后账号还在）
+	s.runs.RemoveToken(payload.Token)
 
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
